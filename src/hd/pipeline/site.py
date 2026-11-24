@@ -2,7 +2,7 @@
 
 The scanner stays on this machine. After each run it writes the current deal
 board and the run's health to deals.json, beside a static index.html, and
-uploads that folder to a Cloudflare Pages project with wrangler. The page
+uploads that folder to Cloudflare as a static-assets Worker with wrangler. The page
 never talks to Home Depot and holds no credentials.
 
 A run that did not see everything publishes its reasons, and the page shows
@@ -104,21 +104,22 @@ def write_site(settings: Settings, data: dict[str, Any]) -> Path:
 
 
 async def deploy_site(settings: Settings, out: Path) -> tuple[bool, str]:
-    """Upload the folder to Cloudflare Pages. Returns (ok, message)."""
+    """Upload the folder to Cloudflare as a static-assets Worker. Returns (ok, message)."""
     npx = shutil.which("npx")
     if npx is None:
         return False, "npx was not found on PATH; install Node.js to publish the page"
     proc = await asyncio.create_subprocess_exec(
-        npx, "--yes", "wrangler", "pages", "deploy", str(out),
-        "--project-name", settings.pages_project,
-        "--branch", "main", "--commit-dirty=true",
+        npx, "--yes", "wrangler", "deploy",
+        "--name", settings.site_worker,
+        "--assets", str(out),
+        "--compatibility-date", "2026-01-01",
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
     )
     try:
-        output, _ = await asyncio.wait_for(proc.communicate(), settings.pages_deploy_timeout)
+        output, _ = await asyncio.wait_for(proc.communicate(), settings.site_deploy_timeout)
     except asyncio.TimeoutError:
         proc.kill()
-        return False, f"wrangler did not finish within {settings.pages_deploy_timeout:.0f}s"
+        return False, f"wrangler did not finish within {settings.site_deploy_timeout:.0f}s"
     text = output.decode(errors="replace").strip()
     if proc.returncode != 0:
         return False, text[-400:] or f"wrangler exited with {proc.returncode}"
@@ -126,14 +127,14 @@ async def deploy_site(settings: Settings, out: Path) -> tuple[bool, str]:
 
 
 async def publish_site(settings: Settings, report: RunReport | None) -> tuple[bool, str]:
-    """Build, write and (when a Pages project is set) upload the deals page."""
+    """Build, write and (when a Worker name is set) upload the deals page."""
     data = await build_site_data(settings, report)
     out = write_site(settings, data)
-    if not settings.pages_project:
-        return True, f"written to {out} (PAGES_PROJECT is not set, so not uploaded)"
+    if not settings.site_worker:
+        return True, f"written to {out} (SITE_WORKER is not set, so not uploaded)"
     ok, message = await deploy_site(settings, out)
     if ok:
-        log.info("Deals page published", project=settings.pages_project)
+        log.info("Deals page published", worker=settings.site_worker)
     else:
         log.error("Deals page could not be published", detail=message)
     return ok, message

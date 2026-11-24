@@ -494,14 +494,14 @@ class Settings(BaseSettings):
     digest_enabled: bool = True
     digest_dir: str = "~"
 
-    # Phone deals page. When pages_project names a Cloudflare Pages project,
-    # every run uploads the current deals and the run's health to it with
-    # `npx wrangler pages deploy`. Empty means nothing is uploaded. The page
-    # is reachable by anyone who has its address unless you restrict it in
+    # Phone deals page. When site_worker names a Cloudflare Worker, every run
+    # uploads the current deals and the run's health to it as static files
+    # with `npx wrangler deploy`. Empty means nothing is uploaded. The page is
+    # reachable by anyone who has its address unless you restrict it in
     # Cloudflare, so it carries deals only — never configuration or secrets.
-    pages_project: str = ""
+    site_worker: str = ""
     site_out_dir: str = ".site_out"
-    pages_deploy_timeout: float = 180.0
+    site_deploy_timeout: float = 180.0
 
     @property
     def store_list(self) -> list[str]:

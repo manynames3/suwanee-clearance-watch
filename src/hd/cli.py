@@ -477,7 +477,7 @@ def install_deals_poll(
 
 @app.command("publish-site")
 def publish_site_cmd() -> None:
-    """Write the phone deals page from the database; upload it if PAGES_PROJECT is set."""
+    """Write the phone deals page from the database; upload it if SITE_WORKER is set."""
     from rich.markup import escape
 
     from hd.config import Settings
@@ -536,7 +536,7 @@ def run_once(
             except Exception as exc:
                 log.error("Digest could not be written", error=str(exc))
                 console.print(f"[red]Digest could not be written: {exc}[/red]")
-            if not settings.pages_project:
+            if not settings.site_worker:
                 return
             from rich.markup import escape as _esc
 

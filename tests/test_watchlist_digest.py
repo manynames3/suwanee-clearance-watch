@@ -423,7 +423,7 @@ class TestDealsPage:
     async def test_missing_npx_is_reported_not_raised(self, wl_settings, tmp_path):
         from hd.pipeline import site
 
-        s = wl_settings.model_copy(update={"pages_project": "x"})
+        s = wl_settings.model_copy(update={"site_worker": "x"})
         with patch.object(site.shutil, "which", return_value=None):
             ok, message = await site.deploy_site(s, tmp_path)
         assert not ok and "npx" in message
@@ -433,7 +433,7 @@ class TestRunOncePublishes(TestRunOnceWiring):
     def test_run_uploads_the_page_and_survives_a_failed_upload(self, cli_env, monkeypatch):
         from hd.pipeline import site
 
-        monkeypatch.setenv("PAGES_PROJECT", "demo")
+        monkeypatch.setenv("SITE_WORKER", "demo")
         monkeypatch.setenv("SITE_OUT_DIR", str(cli_env / "out"))
         calls = []
 
