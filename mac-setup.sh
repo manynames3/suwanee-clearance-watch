@@ -29,26 +29,23 @@ pip install --quiet --upgrade pip
 pip install --quiet -e ".[dashboard]"
 [ -f watchlist.txt ] || cp watchlist.example.txt watchlist.txt
 
-say "3/6 Choosing stores and brands"
-if [ -f .env ] && grep -q '^STORES=..*' .env; then
-  echo "Already configured ($(grep '^STORES=' .env)). Run 'hd setup' to change it."
-else
-  cat <<'TIP'
-The setup wizard asks a few questions. Suggested answers:
-  ZIP code ............ 30024
-  Select store(s) ..... the numbers shown beside #1754 and #6978, e.g. 1,2
-  Brand name .......... one at a time: Milwaukee, DEWALT, Makita, Ryobi
-  Slack ............... skip unless you want phone alerts
-  Install the schedule  Enter (yes) — this makes it run on its own
-TIP
-  hd setup
-fi
+say "3/6 Setting stores, brands and the schedule"
+# No questions and no store lookup: the stores are written directly, and only
+# brands not already saved are looked up. Override with e.g.
+#   BRANDS_WANTED="Milwaukee,Ryobi" ./mac-setup.sh
+BRANDS_WANTED="${BRANDS_WANTED:-Milwaukee,DEWALT,Makita,Ryobi}"
+READY=1
+hd quick-setup \
+  --store "1754|Suwanee|Suwanee|GA|30024" \
+  --store "6978|Brookwood|Suwanee|GA|30024" \
+  --brands "$BRANDS_WANTED" || READY=0
 
 say "4/6 Turning on the dollar floor and the phone page"
 add_setting() {
   if grep -q "^$1=" .env; then echo "$1 already set"; else echo "$1=$2" >> .env; echo "$1=$2 added"; fi
 }
 # Make sure the file ends with a newline so a new setting starts its own line.
+[ -f .env ] || touch .env
 [ -z "$(tail -c1 .env)" ] || echo >> .env
 add_setting MIN_DOLLAR_OFF 20
 add_setting SITE_WORKER clearance-watch
@@ -65,7 +62,12 @@ else
 fi
 
 say "6/6 Running the first scan"
-hd run-once || echo "The scan reported a problem (see above). It will be retried by the schedule."
+if [ "$READY" = 1 ]; then
+  hd run-once || echo "The scan reported a problem (see above). The schedule will try again."
+else
+  echo "Skipped: no brand could be looked up yet because Home Depot is rate limiting."
+  echo "Run ./mac-setup.sh again in about an hour. Nothing else needs redoing."
+fi
 
 cat <<DONE
 

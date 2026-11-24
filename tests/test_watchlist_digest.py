@@ -447,3 +447,146 @@ class TestRunOncePublishes(TestRunOnceWiring):
         assert len(calls) == 1
         assert "could not be published" in result.output
         assert (cli_env / "out" / "deals.json").exists()
+
+
+class TestLastCompleteScan:
+    def _data(self, started, degraded=()):
+        return {"run": {"started": started, "degraded": list(degraded)}, "stores": []}
+
+    def test_clean_run_sets_it_and_a_degraded_run_keeps_it(self, tmp_path):
+        import json as _json
+
+        from hd.pipeline.site import carry_forward
+
+        prev = tmp_path / "deals.json"
+        clean = self._data("2026-11-24T10:00:00+00:00")
+        carry_forward(clean, prev)
+        assert clean["run"]["last_complete"] == "2026-11-24T10:00:00+00:00"
+        prev.write_text(_json.dumps(clean))
+
+        bad = self._data("2026-11-24T18:00:00+00:00", ["throttled"])
+        carry_forward(bad, prev)
+        assert bad["run"]["last_complete"] == "2026-11-24T10:00:00+00:00"
+        assert bad["run"]["started"] == "2026-11-24T18:00:00+00:00"
+
+    def test_first_run_degraded_has_no_complete_scan(self, tmp_path):
+        from hd.pipeline.site import carry_forward
+
+        bad = self._data("2026-11-24T18:00:00+00:00", ["throttled"])
+        carry_forward(bad, tmp_path / "missing.json")
+        assert bad["run"]["last_complete"] is None
+
+    def test_manual_publish_keeps_the_previous_run(self, tmp_path):
+        import json as _json
+
+        from hd.pipeline.site import carry_forward
+
+        prev = tmp_path / "deals.json"
+        prev.write_text(_json.dumps(self._data("2026-11-24T10:00:00+00:00", ["x"])))
+        manual = self._data(None)
+        carry_forward(manual, prev)
+        assert manual["run"]["started"] == "2026-11-24T10:00:00+00:00"
+        assert manual["run"]["degraded"] == ["x"]
+
+
+class TestQuickSetup:
+    STORES = ["1754|Suwanee|Suwanee|GA|30024", "6978"]
+
+    @pytest.fixture
+    def root(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{tmp_path}/q.db")
+        monkeypatch.setenv("THROTTLE_COOLDOWN_PATH", str(tmp_path / "cooldown"))
+        return tmp_path
+
+    @staticmethod
+    def _resolver(calls, *, throttle_on=None, unknown=()):
+        from hd.pipeline.brands import BrandMatch, BrandThrottled
+
+        async def resolve(client, settings, name, store_id):
+            calls.append(name)
+            if name == throttle_on:
+                raise BrandThrottled("206")
+            if name in unknown:
+                return None
+            return BrandMatch(name=name.upper(), token=f"t{len(calls)}")
+        return resolve
+
+    def test_parse_store_forms(self):
+        from hd.quick_setup import parse_store
+
+        full = parse_store("1754|Suwanee|Suwanee|GA|30024")
+        assert (full.store_id, full.name, full.zip) == ("1754", "Suwanee", "30024")
+        assert parse_store("6978").name is None
+        with pytest.raises(ValueError):
+            parse_store("Suwanee")
+
+    async def test_writes_stores_and_brands_without_a_store_lookup(self, root, fresh_db_any):
+        from hd.quick_setup import run_quick_setup
+        from hd.setup_wizard import EnvFile
+
+        calls = []
+        r = await run_quick_setup(root, self.STORES, ["Milwaukee", "Ryobi"],
+                                  install_schedule=False, resolver=self._resolver(calls),
+                                  client=object())
+        env = EnvFile.load(root / ".env")
+        assert env.get("STORES") == "1754,6978"
+        assert env.get("BRAND_TOKENS") == "MILWAUKEE:t1,RYOBI:t2"
+        assert env.get("BRANDS") == "MILWAUKEE,RYOBI"
+        assert r.ready and calls == ["Milwaukee", "Ryobi"]
+
+    async def test_throttle_saves_progress_and_rerun_asks_only_for_the_rest(self, root, fresh_db_any):
+        from hd.quick_setup import run_quick_setup
+        from hd.setup_wizard import EnvFile
+
+        calls = []
+        r = await run_quick_setup(root, self.STORES, ["Milwaukee", "DEWALT", "Makita"],
+                                  install_schedule=False,
+                                  resolver=self._resolver(calls, throttle_on="DEWALT"),
+                                  client=object())
+        assert r.brands_added == ["MILWAUKEE"]
+        assert r.brands_pending == ["DEWALT", "Makita"]
+        assert r.ready
+        assert EnvFile.load(root / ".env").get("BRAND_TOKENS") == "MILWAUKEE:t1"
+
+        calls2 = []
+        r2 = await run_quick_setup(root, self.STORES, ["Milwaukee", "DEWALT", "Makita"],
+                                   install_schedule=False, resolver=self._resolver(calls2),
+                                   client=object())
+        assert calls2 == ["DEWALT", "Makita"]
+        assert r2.brands_kept == ["Milwaukee"]
+        assert EnvFile.load(root / ".env").get("BRANDS") == "MILWAUKEE,DEWALT,MAKITA"
+
+    async def test_active_cooldown_sends_nothing_but_still_saves_stores(self, root, fresh_db_any):
+        from hd.config import Settings as S
+        from hd.http.cooldown import ThrottleCooldown
+        from hd.quick_setup import run_quick_setup
+        from hd.setup_wizard import EnvFile
+
+        ThrottleCooldown(root / "cooldown", S().throttle_cooldown_seconds).start()
+        calls = []
+        r = await run_quick_setup(root, self.STORES, ["Milwaukee"], install_schedule=False,
+                                  resolver=self._resolver(calls), client=object())
+        assert calls == []
+        assert r.brands_pending == ["Milwaukee"] and r.wait
+        assert not r.ready
+        assert EnvFile.load(root / ".env").get("STORES") == "1754,6978"
+
+    async def test_unknown_brand_is_named_not_saved(self, root, fresh_db_any):
+        from hd.quick_setup import run_quick_setup
+
+        r = await run_quick_setup(root, self.STORES, ["Milwaukee", "Nope"],
+                                  install_schedule=False,
+                                  resolver=self._resolver([], unknown={"Nope"}), client=object())
+        assert r.brands_unknown == ["Nope"]
+        assert r.brands_added == ["MILWAUKEE"]
+
+
+@pytest.fixture
+async def fresh_db_any():
+    from hd.db import base
+
+    db = base.Database()
+    with patch.object(base, "_default", db):
+        yield db
+    await db.close_db()

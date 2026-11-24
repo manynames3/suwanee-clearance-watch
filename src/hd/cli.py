@@ -475,6 +475,51 @@ def install_deals_poll(
         console.print(f"[dim]Not loaded. Activate with: launchctl load {path}[/dim]")
 
 
+@app.command("quick-setup")
+def quick_setup(
+    store: list[str] = typer.Option(
+        ..., "--store", help="Store id, or 'id|Name|City|ST|ZIP'. Repeat for each store."
+    ),
+    brands: str = typer.Option(..., help="Brand names, comma separated."),
+    schedule: bool = typer.Option(True, help="Install the recurring scan on macOS."),
+) -> None:
+    """Configure known stores and brands without questions. Safe to run again."""
+    from pathlib import Path
+
+    from rich.markup import escape
+
+    from hd.quick_setup import run_quick_setup
+
+    try:
+        r = asyncio.run(run_quick_setup(
+            Path.cwd(), store, brands.split(","), install_schedule=schedule
+        ))
+    except ValueError as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(2)
+
+    console.print("Stores: " + escape(", ".join(s.label for s in r.stores)))
+    known = r.brands_kept + r.brands_added
+    console.print("Brands: " + (escape(", ".join(known)) if known else "none yet"))
+    for name in r.brands_unknown:
+        console.print(f"[yellow]No brand called {escape(repr(name))} in Home Depot's catalog; skipped.[/yellow]")
+    if r.brands_pending:
+        when = f" in about {r.wait}" if r.wait else " later"
+        console.print(
+            "[yellow]Home Depot is rate limiting, so these brands were not looked up: "
+            f"{escape(', '.join(r.brands_pending))}. Run this again{when}; "
+            "only the missing ones will be requested.[/yellow]"
+        )
+    for name, ok, detail in r.schedule:
+        if ok:
+            console.print(f"[green]Scheduled[/green] {escape(name)}")
+        else:
+            console.print(f"[yellow]Schedule not installed ({escape(name)}): {escape(detail)}[/yellow]")
+    if not r.ready:
+        console.print("[yellow]Not ready to scan yet: no brand is configured.[/yellow]")
+        raise typer.Exit(3)
+
+
 @app.command("publish-site")
 def publish_site_cmd() -> None:
     """Write the phone deals page from the database; upload it if SITE_WORKER is set."""

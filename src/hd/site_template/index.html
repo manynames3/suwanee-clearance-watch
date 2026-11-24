@@ -186,7 +186,11 @@
            ". Check that the scanner is still running on your Mac."]);
       }
       if (d.run.degraded && d.run.degraded.length) {
-        banner("The last scan did not see everything", d.run.degraded);
+        var reasons = d.run.degraded.slice();
+        reasons.push(d.run.last_complete
+          ? "Last complete scan: " + when(d.run.last_complete) + " (" + ago(d.run.last_complete) + ")."
+          : "No complete scan has been published yet.");
+        banner("The last scan did not see everything", reasons);
       }
       current = d.stores.length ? d.stores[0].id : null;
       renderTabs();

@@ -94,6 +94,29 @@ async def build_site_data(settings: Settings, report: RunReport | None) -> dict[
     return {"run": run, "min_dollar_off": floor, "stores": stores}
 
 
+def carry_forward(data: dict[str, Any], previous_path: Path) -> None:
+    """Keep the time of the last complete scan across runs.
+
+    A scan is complete when it reported nothing degraded. A later incomplete
+    scan must not erase that time: it is what tells the reader how old the
+    last trustworthy picture is. A publish with no run of its own (the manual
+    command) keeps the previous run's details instead of blanking them.
+    """
+    previous: dict[str, Any] = {}
+    try:
+        previous = json.loads(previous_path.read_text()).get("run") or {}
+    except (OSError, ValueError, AttributeError):
+        previous = {}
+    run = data["run"]
+    if run.get("started") is None and previous.get("started"):
+        data["run"] = run = dict(previous)
+        return
+    if run.get("started") and not run.get("degraded"):
+        run["last_complete"] = run["started"]
+    else:
+        run["last_complete"] = previous.get("last_complete")
+
+
 def write_site(settings: Settings, data: dict[str, Any]) -> Path:
     """Write index.html, deals.json and _headers into the output folder."""
     out = Path(settings.site_out_dir).expanduser()
@@ -151,6 +174,7 @@ async def deploy_site(settings: Settings, out: Path) -> tuple[bool, str]:
 async def publish_site(settings: Settings, report: RunReport | None) -> tuple[bool, str]:
     """Build, write and (when a Worker name is set) upload the deals page."""
     data = await build_site_data(settings, report)
+    carry_forward(data, Path(settings.site_out_dir).expanduser() / "deals.json")
     out = write_site(settings, data)
     if not settings.site_worker:
         return True, f"written to {out} (SITE_WORKER is not set, so not uploaded)"

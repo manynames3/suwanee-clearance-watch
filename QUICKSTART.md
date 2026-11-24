@@ -14,10 +14,15 @@ cd suwanee-clearance-watch
 ./mac-setup.sh
 ```
 
-The script installs the scanner, starts the setup wizard (ZIP 30024, stores
-1754 and 6978, your brands, and "yes" to installing the schedule), turns on
-the dollar floor and the phone page, logs in to Cloudflare, and runs the
-first scan. It is safe to run again.
+The script asks no questions. It installs the scanner, writes stores 1754 and
+6978, looks up four brands (Milwaukee, DEWALT, Makita, Ryobi), installs three
+scans a day, turns on the dollar floor and the phone page, logs in to
+Cloudflare, and runs the first scan.
+
+If Home Depot rate limits the brand lookup, the script says so and stops
+early. Run it again in about an hour; it only redoes what is missing.
+
+Different brands: `BRANDS_WANTED="Milwaukee,Ryobi" ./mac-setup.sh`
 
 To scan by hand at any time: `source .venv/bin/activate && hd run-once`.
 
