@@ -476,6 +476,33 @@ class Settings(BaseSettings):
     # many installs do not all fire on the same minute.
     scan_minute: int | None = None
 
+    # SKU watchlist: a plain-text file of item ids, one per line, `#` comments
+    # allowed. Each is priced directly at every configured store on every run,
+    # whatever its brand — the only way to see an item the brand walk does not
+    # cover. Costs one request per item per store, so the list is capped.
+    watchlist_path: str = "watchlist.txt"
+    watchlist_max_items: int = 40
+
+    # Smallest saving, in dollars, a deal alert must carry to be recorded.
+    # 0 keeps every alert. A percentage alone lets a $2 item at 90% off through.
+    # Alerts whose saving cannot be computed are kept, never silently dropped.
+    min_dollar_off: float = 0.0
+
+    # Daily Markdown digest. Every run appends a section to
+    # <digest_dir>/clearance-digest-YYYY-MM-DD.md (Eastern date), including
+    # runs that were deferred, throttled or partial — those say so.
+    digest_enabled: bool = True
+    digest_dir: str = "~"
+
+    # Phone deals page. When pages_project names a Cloudflare Pages project,
+    # every run uploads the current deals and the run's health to it with
+    # `npx wrangler pages deploy`. Empty means nothing is uploaded. The page
+    # is reachable by anyone who has its address unless you restrict it in
+    # Cloudflare, so it carries deals only — never configuration or secrets.
+    pages_project: str = ""
+    site_out_dir: str = ".site_out"
+    pages_deploy_timeout: float = 180.0
+
     @property
     def store_list(self) -> list[str]:
         return _parse_csv(self.stores)

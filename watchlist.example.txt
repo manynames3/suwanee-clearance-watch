@@ -1,0 +1,3 @@
+# One Home Depot item id (the "Internet #" on a product page) per line.
+# Copy this file to watchlist.txt. Everything after a # is ignored.
+203317264   # Zinsser Peel Stop 1 gal. Triple-Thick primer

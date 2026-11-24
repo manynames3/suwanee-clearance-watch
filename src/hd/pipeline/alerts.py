@@ -8,7 +8,7 @@ from sqlalchemy import select, func, and_
 
 from hd.config import Settings
 from hd.db.base import get_session
-from hd.db.models import Alert
+from hd.db.models import Alert, AlertType
 from hd.logging import get_logger
 
 log = get_logger("pipeline.alerts")
@@ -39,6 +39,58 @@ def _state_fingerprint(alert: Alert) -> tuple:
     )
 
 
+_FLOORED_TYPES = frozenset({
+    AlertType.PRICE_DROP,
+    AlertType.CLEARANCE,
+    AlertType.DEEP_DISCOUNT,
+    AlertType.IN_STORE_CLEARANCE,
+    AlertType.SPECIAL_BUY,
+})
+
+
+def dollar_saving(alert: Alert) -> float | None:
+    """Dollars saved against the highest reference price the alert carries.
+
+    The deal price is the in-store clearance price when there is one, else the
+    current price. None when either side is unknown.
+    """
+    p = alert.payload or {}
+    after = p.get("after") or {}
+    before = p.get("before") or {}
+    deal = after.get("clearance_value")
+    if deal is None:
+        deal = after.get("price_value")
+    references = [
+        r for r in (
+            after.get("price_original"),
+            before.get("price_value"),
+            p.get("reference_price"),
+            # An in-store clearance price is a saving against the online price.
+            after.get("price_value") if after.get("clearance_value") is not None else None,
+        )
+        if r is not None
+    ]
+    if deal is None or not references:
+        return None
+    return round(max(references) - deal, 2)
+
+
+def apply_dollar_floor(alerts: list[Alert], min_dollar_off: float) -> list[Alert]:
+    """Drop deal alerts that save less than the floor.
+
+    Stock, pricing-error and health alerts are never floored, and an alert
+    whose saving cannot be computed is kept: unknown is not the same as small.
+    """
+    if min_dollar_off <= 0:
+        return alerts
+    kept = []
+    for a in alerts:
+        saving = dollar_saving(a) if a.alert_type in _FLOORED_TYPES else None
+        if saving is None or saving >= min_dollar_off:
+            kept.append(a)
+    return kept
+
+
 async def write_alerts(settings: Settings, alerts: list[Alert]) -> int:
     """Bulk insert alerts into the database with content-based deduplication.
 
@@ -50,6 +102,13 @@ async def write_alerts(settings: Settings, alerts: list[Alert]) -> int:
 
     Returns the number of alerts written.
     """
+    floored = apply_dollar_floor(alerts, settings.min_dollar_off)
+    if len(floored) < len(alerts):
+        log.info(
+            "Alerts under the dollar floor dropped",
+            dropped=len(alerts) - len(floored), min_dollar_off=settings.min_dollar_off,
+        )
+    alerts = floored
     if not alerts:
         return 0
 

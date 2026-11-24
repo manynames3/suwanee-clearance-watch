@@ -475,6 +475,21 @@ def install_deals_poll(
         console.print(f"[dim]Not loaded. Activate with: launchctl load {path}[/dim]")
 
 
+@app.command("publish-site")
+def publish_site_cmd() -> None:
+    """Write the phone deals page from the database; upload it if PAGES_PROJECT is set."""
+    from rich.markup import escape
+
+    from hd.config import Settings
+    from hd.pipeline.site import publish_site
+
+    settings = Settings()
+    ok, message = asyncio.run(publish_site(settings, None))
+    console.print(f"[{'green' if ok else 'red'}]{escape(message)}[/]")
+    if not ok:
+        raise typer.Exit(1)
+
+
 @app.command()
 def run_once(
     mode: str = typer.Option("auto", help="Run mode: auto, full, snapshot-only"),
@@ -504,6 +519,38 @@ def run_once(
 
         log = get_logger("pipeline")
 
+        from hd.pipeline.digest import RunReport, previously_seen, write_digest
+        from hd.pipeline.watchlist import request_allowance, run_watchlist
+
+        report = RunReport(
+            started=datetime.now(timezone.utc), stores=list(settings.store_list)
+        )
+
+        async def _digest() -> None:
+            # The digest is a convenience on top of the scan and must never
+            # fail it — but a digest that could not be written is said loudly.
+            try:
+                path = await write_digest(settings, report)
+                if path:
+                    console.print(f"[dim]Digest: {path}[/dim]")
+            except Exception as exc:
+                log.error("Digest could not be written", error=str(exc))
+                console.print(f"[red]Digest could not be written: {exc}[/red]")
+            if not settings.pages_project:
+                return
+            from rich.markup import escape as _esc
+
+            try:
+                from hd.pipeline.site import publish_site
+
+                ok, message = await publish_site(settings, report)
+                style = "dim" if ok else "red"
+                label = "Deals page" if ok else "Deals page could not be published"
+                console.print(f"[{style}]{label}: {_esc(message)}[/{style}]")
+            except Exception as exc:
+                log.error("Deals page could not be published", error=str(exc))
+                console.print(f"[red]Deals page could not be published: {_esc(str(exc))}[/red]")
+
         # Determine effective mode
         effective_mode = mode
         if mode == "auto":
@@ -524,19 +571,44 @@ def run_once(
                 "Deferring run — Home Depot throttled an earlier run",
                 resumes_in_seconds=round(cooldown.remaining_seconds()),
             )
+            report.mode = "deferred"
+            report.has_alerts = False
+            report.degraded.append(
+                "Run deferred without reading anything: Home Depot throttled an "
+                f"earlier run. Resumes in about {round(cooldown.remaining_seconds() / 60)} min."
+            )
+            await _digest()
             return 0, 0, 0, 0, 0, "cooldown"
 
         log.info("Pipeline starting", mode=effective_mode, browse=settings.browse_enabled)
         await _init_tables(settings)
 
+        # The watchlist gets its own allowance on top of the scan's budget, so
+        # hand-picked items never starve the brand walk or the reverse.
+        watch_allowance = request_allowance(settings)
         if settings.browse_enabled:
-            shared_client = HDClient(settings, request_budget=settings.browse_request_budget)
+            base_budget = settings.browse_request_budget
         else:
-            shared_client = HDClient(settings)
+            base_budget = settings.request_budget
+        shared_client = HDClient(
+            settings,
+            request_budget=base_budget + watch_allowance if base_budget > 0 else 0,
+        )
         product_count = 0
         snapshot_count = 0
+        browse_summary = None
+        watch = None
 
         try:
+            # Watchlist first: a small, fixed cost, and these are the items
+            # nothing else in the run will look at.
+            if watch_allowance:
+                watch = await run_watchlist(
+                    settings, shared_client, settings.store_list, now=report.started
+                )
+                product_count += watch.products
+                snapshot_count += watch.snapshots
+
             if settings.browse_enabled:
                 from hd.pipeline.browse import (
                     current_et_hour,
@@ -591,6 +663,7 @@ def run_once(
                     tiers=tiers,
                     now=run_started,
                 )
+                browse_summary = summary
                 product_count += summary.products
                 snapshot_count += summary.snapshots
                 effective_mode = "browse"
@@ -609,12 +682,22 @@ def run_once(
                     if settings.stage_delay_seconds > 0:
                         await asyncio.sleep(settings.stage_delay_seconds)
 
-                snapshot_count = await run_snapshots(
+                snapshot_count += await run_snapshots(
                     settings=settings,
                     store_ids=settings.store_list,
                     client=shared_client,
                 )
             log.info("Scan complete", products=product_count, rows=snapshot_count, requests=shared_client.request_count)
+        except Exception as exc:
+            # A crashed run still leaves a digest entry saying it saw nothing
+            # reliable, then fails as it would have.
+            report.mode = "failed"
+            report.snapshots = snapshot_count
+            report.requests = shared_client.request_count
+            report.has_alerts = False
+            report.degraded.append(f"The run stopped on an error before finishing: {exc}")
+            await _digest()
+            raise
         finally:
             metrics = shared_client.metrics
             log.info("Request metrics", **metrics.summary())
@@ -630,7 +713,69 @@ def run_once(
             from rich.markup import escape
 
             console.print(f"[dim]HTTP: {escape(metrics.render())}[/dim]")
+            report.requests = shared_client.request_count
+            if shared_client.is_throttled:
+                report.degraded.append(
+                    "Home Depot throttled this run (HTTP 206). Everything after "
+                    "that point was not read."
+                )
             await shared_client.close()
+
+        report.mode = effective_mode
+        report.snapshots = snapshot_count
+        if snapshot_count == 0:
+            report.degraded.append("The run captured no price readings at all.")
+        if browse_summary is not None:
+            if browse_summary.aborted and not report.degraded:
+                report.degraded.append("The category walk stopped before it finished.")
+            if browse_summary.truncated_walks:
+                report.degraded.append(
+                    f"{len(browse_summary.truncated_walks)} category walk(s) were cut short: "
+                    + ", ".join(str(w) for w in browse_summary.truncated_walks[:10])
+                )
+            short = browse_summary.deferred_walks + browse_summary.deferred_categories
+            if short:
+                report.degraded.append(
+                    f"The request budget ran out: {browse_summary.deferred_walks} walk(s) and "
+                    f"{browse_summary.deferred_categories} categor(ies) were not read."
+                )
+            if browse_summary.skipped_walks:
+                report.notes.append(
+                    f"{browse_summary.skipped_walks} category walk(s) were left for a later "
+                    "run by the normal rotation."
+                )
+        if watch is not None:
+            if watch.failed:
+                report.degraded.append(
+                    f"{len(watch.failed)} watchlist lookup(s) failed or were never sent: "
+                    + ", ".join(f"{i} at #{s}" for s, i in watch.failed[:10])
+                )
+            if watch.capped:
+                report.degraded.append(
+                    f"The watchlist holds {watch.listed} items; the last {watch.capped} "
+                    "were not checked (WATCHLIST_MAX_ITEMS)."
+                )
+            if watch.not_returned:
+                # An item that used to answer and now does not is suspicious;
+                # one that never has is more likely a wrong id.
+                known = await previously_seen(settings, watch.not_returned)
+                lost = [pair for pair in watch.not_returned if pair in known]
+                fresh = [pair for pair in watch.not_returned if pair not in known]
+                if lost:
+                    report.degraded.append(
+                        "Watchlist items seen before came back empty: "
+                        + ", ".join(f"{i} at #{s}" for s, i in lost[:10])
+                    )
+                if fresh:
+                    report.notes.append(
+                        "Watchlist items the API has never returned (check the ids): "
+                        + ", ".join(f"{i} at #{s}" for s, i in fresh[:10])
+                    )
+            if watch.invalid_lines:
+                report.notes.append(
+                    "Watchlist lines ignored because they are not item ids: "
+                    + ", ".join(watch.invalid_lines[:10])
+                )
 
         # Liveness: a run that captured nothing is a blind run. Report the
         # transition, not the state — see hd.pipeline.health.
@@ -641,6 +786,12 @@ def run_once(
         if alerts_list:
             alert_count = await write_alerts(settings=settings, alerts=alerts_list)
         log.info("Diff complete", alerts=alert_count)
+
+        await _digest()
+        if report.degraded:
+            console.print("[yellow]HEALTH_DEGRADED — this run did not see everything:[/yellow]")
+            for reason in report.degraded:
+                console.print(f"[yellow]  - {reason}[/yellow]")
 
         # Auto-notify Slack when new alerts are found
         sent_count = 0
