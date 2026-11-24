@@ -11,31 +11,15 @@ The scanner runs on your Mac. Nothing here logs in to Home Depot or buys anythin
 ```bash
 git clone https://github.com/manynames3/suwanee-clearance-watch.git
 cd suwanee-clearance-watch
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dashboard]"
-cp watchlist.example.txt watchlist.txt
-hd setup          # ZIP 30024, pick stores 1754 and 6978, then your brands
+./mac-setup.sh
 ```
 
-Then add these lines to `.env`:
+The script installs the scanner, starts the setup wizard (ZIP 30024, stores
+1754 and 6978, your brands, and "yes" to installing the schedule), turns on
+the dollar floor and the phone page, logs in to Cloudflare, and runs the
+first scan. It is safe to run again.
 
-```
-MIN_DOLLAR_OFF=20
-SITE_WORKER=clearance-watch
-```
-
-## Turn on the phone page (once)
-
-```bash
-npx wrangler login     # opens Cloudflare in your browser
-```
-
-## Run it
-
-```bash
-hd run-once            # scan now
-hd install-schedule    # scan automatically, three times a day
-```
+To scan by hand at any time: `source .venv/bin/activate && hd run-once`.
 
 After each scan:
 

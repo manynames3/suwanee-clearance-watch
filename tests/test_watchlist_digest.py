@@ -424,7 +424,7 @@ class TestDealsPage:
         from hd.pipeline import site
 
         s = wl_settings.model_copy(update={"site_worker": "x"})
-        with patch.object(site.shutil, "which", return_value=None):
+        with patch.object(site, "_find_npx", return_value=None):
             ok, message = await site.deploy_site(s, tmp_path)
         assert not ok and "npx" in message
 

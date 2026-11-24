@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -103,17 +104,38 @@ def write_site(settings: Settings, data: dict[str, Any]) -> Path:
     return out
 
 
+def _find_npx() -> str | None:
+    """Locate npx, including the usual macOS install folders a scheduled job's PATH lacks."""
+    found = shutil.which("npx")
+    if found:
+        return found
+    home = Path.home()
+    candidates = [
+        Path("/opt/homebrew/bin/npx"), Path("/usr/local/bin/npx"),
+        home / ".volta/bin/npx", home / ".bun/bin/npx",
+        *sorted((home / ".nvm/versions/node").glob("*/bin/npx"), reverse=True),
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
 async def deploy_site(settings: Settings, out: Path) -> tuple[bool, str]:
     """Upload the folder to Cloudflare as a static-assets Worker. Returns (ok, message)."""
-    npx = shutil.which("npx")
+    npx = _find_npx()
     if npx is None:
-        return False, "npx was not found on PATH; install Node.js to publish the page"
+        return False, "npx was not found; install Node.js to publish the page"
+    # Scheduled runs start with a bare PATH; node must be findable beside npx.
+    env = dict(os.environ)
+    env["PATH"] = str(Path(npx).parent) + os.pathsep + env.get("PATH", "")
     proc = await asyncio.create_subprocess_exec(
         npx, "--yes", "wrangler", "deploy",
         "--name", settings.site_worker,
         "--assets", str(out),
         "--compatibility-date", "2026-01-01",
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+        env=env,
     )
     try:
         output, _ = await asyncio.wait_for(proc.communicate(), settings.site_deploy_timeout)
