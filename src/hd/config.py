@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     extra_nav_params: str = ""  # Additional category navParams (CSV), no product_line_filter applied
     shelf_category_walks: str = ""  # CSV of Label:token — store-wide category nodes walked every shelf pass, every brand captured
     clearance_token: str = "1z11adf"
-    max_concurrency: int = 3
+    max_concurrency: int = 1  # requests are sent one at a time; kept as a documented ceiling
     # Tokens available at the start of a run. At the previous value (which
     # borrowed max_concurrency) every run opened with a 3-request burst before
     # any pacing applied — the least restrained moment of the whole run.
@@ -373,6 +373,30 @@ class Settings(BaseSettings):
     throttle_cooldown_path: str = ".hd_throttle_cooldown"
     throttle_cooldown_seconds: float = 3600.0
     max_retry_after_seconds: float = 300.0
+
+    # Drip-feed pacing: the default for a home connection. One request at a
+    # time, a random 4-10 s apart, with a longer rest every `drip_idle_every`
+    # requests. Turn it off only for tests or a connection you own outright.
+    drip_feed_enabled: bool = True
+    drip_pace_min_seconds: float = 4.0
+    drip_pace_max_seconds: float = 10.0
+    drip_idle_every: int = 40
+    drip_idle_min_seconds: float = 20.0
+    drip_idle_max_seconds: float = 60.0
+
+    # Soft-block detection: a 200 that comes back empty or short for a category
+    # that used to be well populated is treated as a refusal. See http/softblock.
+    soft_block_detection: bool = True
+    known_totals_path: str = ".hd_known_totals.json"
+    soft_block_cooldown_seconds: float = 1800.0
+
+    # Tiered polling. Hot (watchlist and live clearance) is checked every run;
+    # warm (the in-store shelf tier) follows its own rotation; cold (the large
+    # online-network tier) runs at most once per interval, since it is the
+    # costliest tier and the slowest-moving. 0 disables the gate.
+    tiered_polling: bool = True
+    network_tier_min_interval_hours: float = 24.0
+    tier_state_path: str = ".hd_tier_state.json"
 
     # Baseline instrumentation. Each run appends one summary line (success
     # rate, latency percentiles, status/outcome counts) so the API's behaviour

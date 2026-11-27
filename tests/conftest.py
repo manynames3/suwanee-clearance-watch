@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from hd.config import Settings
 from hd.db.models import Base
+
+# Drip-feed pacing is the shipped default and sleeps 4-10 s between requests.
+# Tests that are not about pacing must not wait it out; the pacing tests turn it
+# on explicitly. Set before any Settings is built.
+os.environ.setdefault("DRIP_FEED_ENABLED", "false")
 
 
 @pytest_asyncio.fixture(autouse=True)

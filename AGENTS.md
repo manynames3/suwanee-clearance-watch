@@ -72,15 +72,19 @@ CLI (cli.py / typer)
         ├── snapshot.py       → calls GraphQL API → appends store_snapshots (legacy keyword mode)
         ├── diff.py           → reads snapshots → produces Alert objects
         ├── alerts.py         → writes Alert objects to alerts table
-        └── health.py         → checks API response health → emits HEALTH_DEGRADED
+        ├── health.py         → checks API response health → emits HEALTH_DEGRADED
+        └── tiering.py        → gates the costly online-network (cold) tier to once per interval
               ↑
         hd_api/
           ├── graphql.py      → builds + sends GraphQL POST requests
           └── parsers.py      → maps raw JSON → NormalizedProduct / NormalizedSnapshot
               ↑
         http/
-          ├── client.py       → httpx wrapper with headers, retry, circuit breaker
-          └── rate_limit.py   → async token bucket + jitter
+          ├── transport.py    → curl transport (the gateway refuses Python TLS stacks)
+          ├── client.py       → headers, retry, circuit breaker, refusal + soft-block handling
+          ├── rate_limit.py   → token bucket + jitter, adaptive slow-down, drip pacing
+          ├── softblock.py    → flags implausibly empty 200s on known-populated categories
+          └── cooldown.py     → refusal/throttle cooldown that survives between runs
               ↑
         db/
           ├── base.py         → SQLAlchemy async engine + session
@@ -147,7 +151,7 @@ hd alerts [--limit] [--type] [--since]# print recent alerts
 hd notify [--since] [--dry-run]       # send alerts recorded since the cursor to Slack
 hd canvas-update [--dry-run] [--reset]# refresh the persistent Slack canvas rundown
 hd serve [--host] [--port]            # start the NiceGUI web dashboard
-hd doctor                             # check that this installation is wired up correctly
+hd doctor [--network]                 # check the installation; --network names what kind of request trouble this is
 hd health                             # print last run health status
 hd backfill-stats                     # rebuild item_price_stats from raw snapshots
 hd prune [--days] [--dry-run]         # delete snapshots past retention (guarded)

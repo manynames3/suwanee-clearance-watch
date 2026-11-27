@@ -679,6 +679,13 @@ def run_once(
                 else:
                     tiers = ("shelf", "network")
 
+                # Cold-tier gate: the costly online-network walk runs at most
+                # once per interval. A run left with no tier still does the hot
+                # work (watchlist, daily deals) and says so in its digest.
+                from hd.pipeline.tiering import gate_tiers, mark_cold_completed
+
+                tiers = gate_tiers(settings, tiers, run_started)
+
                 # Daily Deals goes first, ahead of the browse tiers. A daily
                 # deal is valid for one day; shelf clearance persists for days.
                 # The brand gate means this usually spends no API requests at all.
@@ -701,16 +708,31 @@ def run_once(
 
                 # Facet-driven browse replaces keyword discovery + snapshots:
                 # both tiers upsert products and append snapshots per page.
-                summary = await run_browse(
-                    settings=settings,
-                    store_ids=settings.store_list,
-                    client=shared_client,
-                    tiers=tiers,
-                    now=run_started,
-                )
-                browse_summary = summary
-                product_count += summary.products
-                snapshot_count += summary.snapshots
+                if tiers:
+                    summary = await run_browse(
+                        settings=settings,
+                        store_ids=settings.store_list,
+                        client=shared_client,
+                        tiers=tiers,
+                        now=run_started,
+                    )
+                    browse_summary = summary
+                    product_count += summary.products
+                    snapshot_count += summary.snapshots
+                    if "network" in tiers and not (
+                        summary.aborted
+                        or summary.truncated_walks
+                        or summary.deferred_walks
+                        or summary.deferred_categories
+                        or shared_client.is_throttled
+                    ):
+                        mark_cold_completed(settings, run_started)
+                else:
+                    report.notes.append(
+                        "The online-network tier was not due this run "
+                        f"(it runs about every {settings.network_tier_min_interval_hours:g} h); "
+                        "only the watchlist and daily deals were read."
+                    )
                 effective_mode = "browse"
                 log.info("Tiers this run", hour_et=et_hour, tiers=list(tiers), daily_deals=run_dd)
 
@@ -760,15 +782,21 @@ def run_once(
             console.print(f"[dim]HTTP: {escape(metrics.render())}[/dim]")
             report.requests = shared_client.request_count
             if shared_client.is_throttled:
-                report.degraded.append(
-                    "Home Depot throttled this run (HTTP 206). Everything after "
-                    "that point was not read."
-                )
+                fails = shared_client.failures
+                if fails.get("soft_block"):
+                    why = ("Home Depot answered with implausibly empty pages (a suspected "
+                           "soft block). Those pages were discarded, not recorded.")
+                elif fails.get("http_403") or fails.get("challenge_html"):
+                    why = "Home Depot refused the requests (HTTP 403 or a challenge page)."
+                else:
+                    why = "Home Depot throttled this run (HTTP 206)."
+                report.degraded.append(f"{why} Everything after that point was not read.")
             await shared_client.close()
 
         report.mode = effective_mode
         report.snapshots = snapshot_count
-        if snapshot_count == 0:
+        nothing_due = settings.browse_enabled and not tiers
+        if snapshot_count == 0 and not nothing_due:
             report.degraded.append("The run captured no price readings at all.")
         if browse_summary is not None:
             if browse_summary.aborted and not report.degraded:
@@ -824,7 +852,8 @@ def run_once(
 
         # Liveness: a run that captured nothing is a blind run. Report the
         # transition, not the state — see hd.pipeline.health.
-        await _report_scan_health(settings, ok=snapshot_count > 0)
+        if not (nothing_due and snapshot_count == 0):
+            await _report_scan_health(settings, ok=snapshot_count > 0)
 
         alerts_list = await run_diff(settings=settings)
         alert_count = 0
@@ -1078,10 +1107,32 @@ def doctor(
     fix: bool = typer.Option(
         False, "--fix", help="Apply the repairs that are safe to automate"
     ),
+    network: bool = typer.Option(
+        False, "--network",
+        help="Diagnose request trouble (quota, refusal, soft block, connection) from recorded runs",
+    ),
 ) -> None:
     """Check that this installation is wired up correctly."""
     setup_logging()
     settings = Settings()
+
+    if network:
+        from hd.doctor import FAIL, OK, WARN
+        from hd.network_doctor import check_network
+
+        marks = {OK: "[green]OK  [/green]", WARN: "[yellow]WARN[/yellow]", FAIL: "[red]FAIL[/red]"}
+        table = Table(title="HD Scanner — network check")
+        table.add_column("", width=4)
+        table.add_column("check", style="cyan")
+        table.add_column("detail")
+        results = check_network(settings)
+        for c in results:
+            table.add_row(marks.get(c.status, c.status), c.name, c.detail)
+        console.print(table)
+        for c in results:
+            if c.fix:
+                console.print(f"[bold]{c.name}:[/bold] {c.fix}")
+        raise typer.Exit(1 if any(c.failed for c in results) else 0)
 
     async def _doctor():
         from hd.db.base import close_db

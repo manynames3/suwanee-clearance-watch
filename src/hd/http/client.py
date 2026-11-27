@@ -24,6 +24,7 @@ from hd.http.transport import (
     TransportError,
 )
 from hd.http.rate_limit import TokenBucketRateLimiter
+from hd.http.softblock import SoftBlockDetector
 from hd.logging import get_logger
 
 log = get_logger("http.client")
@@ -262,11 +263,22 @@ class HDClient:
                 max_bytes=getattr(settings, "max_response_bytes", 10 * 1024 * 1024),
             )
         )
+        drip = bool(getattr(settings, "drip_feed_enabled", False))
         self._rate_limiter = TokenBucketRateLimiter(
             rps=settings.rate_limit_rps,
             burst=getattr(settings, "rate_limit_burst", 1),
             jitter_min_ms=settings.jitter_min_ms,
             jitter_max_ms=settings.jitter_max_ms,
+            pace_min_s=getattr(settings, "drip_pace_min_seconds", 0.0) if drip else 0.0,
+            pace_max_s=getattr(settings, "drip_pace_max_seconds", 0.0) if drip else 0.0,
+            idle_every=getattr(settings, "drip_idle_every", 0) if drip else 0,
+            idle_min_s=getattr(settings, "drip_idle_min_seconds", 0.0),
+            idle_max_s=getattr(settings, "drip_idle_max_seconds", 0.0),
+        )
+        self._soft_blocks = (
+            SoftBlockDetector(getattr(settings, "known_totals_path", None))
+            if getattr(settings, "soft_block_detection", False)
+            else None
         )
         self._circuit_breaker = CircuitBreaker(
             threshold=settings.circuit_breaker_failure_threshold,
@@ -318,6 +330,10 @@ class HDClient:
                 current = current.parent
             raise FileNotFoundError("Cannot find queries/searchModel.graphql")
         return self._query_cache
+
+    @property
+    def rate_limiter(self) -> TokenBucketRateLimiter:
+        return self._rate_limiter
 
     @property
     def request_count(self) -> int:
@@ -454,7 +470,12 @@ class HDClient:
                 return self._fail("http_206_quota")
 
             if status_code == 429:
-                log.warning("Received 429 — rate limited", retry_after=retry_after)
+                slowed_to = self._rate_limiter.slow_down()
+                log.warning(
+                    "Received 429 — rate limited, slowing down",
+                    retry_after=retry_after,
+                    new_rps=round(slowed_to, 3),
+                )
                 self._circuit_breaker.record_failure()
                 if attempt < max_attempts:
                     if await self._wait_or_stop(retry_after, attempt):
@@ -527,6 +548,28 @@ class HDClient:
                 )
                 return data  # Return raw error for upstream inspection
 
+            # A 200 that is well-formed but implausibly empty for a category
+            # that used to be populated is a silent refusal. Stop like any
+            # other refusal; never hand the empty page on as "no products".
+            if self._soft_blocks is not None:
+                why = self._soft_blocks.assess(variables, data)
+                if why:
+                    self._metrics.records[-1] = replace(
+                        self._metrics.records[-1], outcome="soft_block"
+                    )
+                    self._throttled = True
+                    until = self._cooldown.start(
+                        getattr(self._settings, "soft_block_cooldown_seconds", 1800.0)
+                    )
+                    log.warning(
+                        "Soft block suspected — treating the empty answer as a refusal",
+                        reason=why,
+                        cooldown_until=until.isoformat(),
+                    )
+                    self._circuit_breaker.record_failure()
+                    return self._fail("soft_block")
+                self._soft_blocks.save()
+
             # Hand successful responses to the sink too, so it can bank a
             # header baseline (which headers a normal 200 even carries). The
             # sink keeps only the first per run; ordinary 200s are dropped
@@ -535,6 +578,7 @@ class HDClient:
                 status_code, response, {**refusal_context, "outcome": "ok"}
             )
             self._circuit_breaker.record_success()
+            self._rate_limiter.note_success()
             return data
 
         except subprocess.TimeoutExpired:
