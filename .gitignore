@@ -39,6 +39,9 @@ hd_prune.*.log
 raw_responses/
 screenshots/
 *.png
+# Shipped assets: the installable page's icons and the README screenshots.
+!src/hd/site_template/*.png
+!docs/img/*.png
 .playwright-mcp/
 
 # Claude Code local settings
