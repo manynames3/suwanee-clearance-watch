@@ -15,7 +15,6 @@ cleanly, and scans nothing.
 from __future__ import annotations
 
 import math
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -278,16 +277,8 @@ async def _prompt_stores(console, settings: Settings) -> list[StoreResult]:
 
 async def _prompt_brands(console, settings: Settings, store_id: str) -> list:
     """Ask for brand names and resolve each to a verified facet token."""
-    import typer
 
     from hd.http.client import HDClient
-    from hd.pipeline.brands import (
-        BrandResolutionError,
-        BrandThrottled,
-        resolve_brand,
-        suggest_brands,
-        list_brands,
-    )
 
     console.print("\n[bold]Which brands should be tracked?[/bold]")
     console.print(

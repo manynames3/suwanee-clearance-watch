@@ -1,7 +1,6 @@
 """Phase 4: push notifiers, rule subscriptions and dedupe."""
 
 import asyncio
-import json
 
 import pytest
 

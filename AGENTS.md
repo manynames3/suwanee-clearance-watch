@@ -19,7 +19,7 @@ Read these documents before starting any task:
 1. `PRD.md` — What we are building and why
 2. `SPEC.md` — Technical design, data models, API integration details
 3. `TASKS.md` — Build order, task list, and acceptance gates (your primary work queue)
-4. `compass_artifact_wf-1dda5335-81d8-4947-a52a-c05d03de3b39_text_markdown.md` — Standalone API research guide: full reverse-engineering of the Home Depot GraphQL endpoint, request/response schemas, clearance detection fields, inventory paths, navParam tokens, brand filter tokens, rate limiting notes, and community tooling survey
+4. `docs/REFERENCE.md` — the user manual; API research notes live in `SPEC.md` §6 and `diagnostics/`
 
 ---
 
@@ -65,19 +65,25 @@ These rules bind the project as published. An operator running a private, local 
 ## Architecture Summary
 
 ```
-CLI (cli.py / typer)
-  └── Pipeline orchestration
-        ├── browse.py         → facet-driven brand browse → upserts products + appends store_snapshots (default)
-        ├── discovery.py      → calls GraphQL API → upserts products table (legacy keyword mode)
-        ├── snapshot.py       → calls GraphQL API → appends store_snapshots (legacy keyword mode)
-        ├── diff.py           → reads snapshots → produces Alert objects
-        ├── alerts.py         → writes Alert objects to alerts table
+CLI (hd/cli/ package: setup_cmds, scan_cmds, run_cmd, report_cmds, maintenance_cmds; thin wrappers)
+  └── Pipeline orchestration (pipeline/runner.py is `hd run-once` as a service)
+        ├── browse.py         → facade over nav_planner / fetcher / normalizer / persister
+        │     ├── nav_planner.py → which categories to walk, caps, price partitioning (pure)
+        │     ├── fetcher.py     → page walking, facets, pacing, soft-block aware
+        │     ├── normalizer.py  → pure rules: raw responses → products and snapshots
+        │     └── persister.py   → writes walks, runs, coverage memory
+        ├── discovery.py, snapshot.py → legacy keyword mode; snapshot.py also records pickup state
+        ├── confidence.py     → 0–100 stock-confidence score (pure); probe.py → stage-2 single-item check
+        ├── diff.py, alerts.py → snapshots → Alert objects; alerts.py applies the No-BS filter
         ├── health.py         → checks API response health → emits HEALTH_DEGRADED
-        └── tiering.py        → gates the costly online-network (cold) tier to once per interval
+        ├── tiering.py        → gates the costly online-network (cold) tier to once per interval
+        └── site.py, digest.py → phone page (installable PWA) and Markdown digest
               ↑
+        retailers/            → RetailerAdapter protocol; homedepot.py is the first adapter
         hd_api/
           ├── graphql.py      → builds + sends GraphQL POST requests
-          └── parsers.py      → maps raw JSON → NormalizedProduct / NormalizedSnapshot
+          ├── parsers.py      → maps raw JSON → NormalizedProduct / NormalizedSnapshot
+          └── schema.py       → typed contract + drift report (used by `hd canary`)
               ↑
         http/
           ├── transport.py    → curl transport (the gateway refuses Python TLS stacks)
@@ -88,7 +94,11 @@ CLI (cli.py / typer)
               ↑
         db/
           ├── base.py         → SQLAlchemy async engine + session
-          └── models.py       → ORM models + enums
+          ├── models.py       → ORM models + enums
+          └── repository.py   → every read query (dashboard, site, digest, alerts share it)
+
+notifiers/ → Slack (formatter, webhook, canvas) plus channels.py (ntfy, Pushover, Discord,
+             Telegram, email), rules.py (subscriptions), dedupe.py, dispatch.py
 ```
 
 ---
@@ -138,6 +148,7 @@ Run migrations: `hd init-db`
 ## CLI Commands Quick Reference
 
 ```
+hd init --zip ZIP [--radius] [--dry-run] # non-interactive setup: nearest stores + brands + schedule
 hd setup                              # interactive first-run: find stores and brands, write .env, schedule jobs
 hd init-db                            # create/migrate tables + seed the configured stores
 hd add-store <id> [--name] [--state]  # add a store
@@ -153,6 +164,8 @@ hd canvas-update [--dry-run] [--reset]# refresh the persistent Slack canvas rund
 hd serve [--host] [--port]            # start the NiceGUI web dashboard
 hd doctor [--network]                 # check the installation; --network names what kind of request trouble this is
 hd health                             # print last run health status
+hd canary                             # one request: does the response still match the typed schema?
+hd notify-test                        # send a test through every configured push channel
 hd backfill-stats                     # rebuild item_price_stats from raw snapshots
 hd prune [--days] [--dry-run]         # delete snapshots past retention (guarded)
 ```
@@ -169,7 +182,9 @@ uncaptured; run `hd backfill-stats` first. Never rebuild the aggregate from
 
 ## Outbound Notifications
 
-Results leave the scanner through Slack, in two separate shapes. Both are
+Results leave the scanner through Slack, in two separate shapes, and through
+the push channels in `notifiers/channels.py` (ntfy, Pushover, Discord, Telegram,
+email; rules in `NOTIFY_RULES`, de-duplicated by `notifiers/dedupe.py`). All are
 optional: with no `SLACK_BOT_TOKEN` and `SLACK_CHANNEL_ID` configured, the
 scanner records everything to the database and sends nothing.
 
@@ -190,7 +205,7 @@ refreshes it as part of a completed scan.
 A failure in either path is logged and never fails the scan: the scan is the
 product, and a notification is a convenience on top of it.
 
-**Optional local extensions.** `cli.py` looks for an `hd.plugins` package
+**Optional local extensions.** `hd/cli/_common.py` looks for an `hd.plugins` package
 beside it and, if one is present, calls `register(app)` to attach extra
 commands and `post_run_hooks()` after a completed scan; `http/client.py` offers
 matching hooks for response inspection and header policy. Nothing ships with

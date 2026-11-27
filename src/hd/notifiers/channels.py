@@ -13,7 +13,7 @@ from email.message import EmailMessage
 
 from hd.config import Settings
 from hd.logging import get_logger
-from hd.notifiers.base import Notification, http_post
+from hd.notifiers.base import Notification, Notifier, http_post
 
 log = get_logger("notifiers.channels")
 
@@ -125,7 +125,7 @@ class EmailNotifier:
         return await asyncio.to_thread(_send)
 
 
-ALL_NOTIFIERS = [
+ALL_NOTIFIERS: list[Notifier] = [
     NtfyNotifier(),
     PushoverNotifier(),
     DiscordNotifier(),

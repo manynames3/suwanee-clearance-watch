@@ -7,14 +7,12 @@ from decimal import Decimal
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from hd.config import Settings
 from hd.db.base import Database
 from hd.db.models import (
     Alert,
     AlertType,
-    Base,
     ItemPriceStat,
     Product,
     Severity,

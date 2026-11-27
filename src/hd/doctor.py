@@ -12,11 +12,9 @@ question, which is what this module does.
 
 from __future__ import annotations
 
-import os
 import plistlib
 import shutil
 import subprocess
-import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -246,7 +244,6 @@ def check_storage(settings: Settings) -> Iterable[Check]:
     cutoff = time.time() - days * 86400
     overdue = [f for f in files if f.stat().st_mtime < cutoff]
     if overdue:
-        freed = sum(f.stat().st_size for f in overdue) / 1e6
         yield Check("raw-responses", WARN,
                     f"{len(files):,} files, {total:,.0f} MB — "
                     f"{len(overdue):,} past the {days}-day window",

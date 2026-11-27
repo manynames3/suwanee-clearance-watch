@@ -123,7 +123,7 @@ def _build_group_blocks(g: dict) -> list[dict[str, Any]]:
             qty = sa_after.get("inventory_qty")
             qty_str = f" / {qty}" if qty is not None else ""
             by_store_lines.append(f"Store {sid}: {price_line} · {label}{qty_str}")
-        fields.append({"type": "mrkdwn", "text": f"*By Store:*\n" + "\n".join(by_store_lines)})
+        fields.append({"type": "mrkdwn", "text": "*By Store:*\n" + "\n".join(by_store_lines)})
     else:
         # Price field
         if alert_type == "PRICE_DROP":

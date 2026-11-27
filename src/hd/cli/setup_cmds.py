@@ -102,6 +102,76 @@ def add_store(
         console.print(f"[yellow]Store {store_id} already exists — pass fields to update.[/yellow]")
 
 
+@app.command("init")
+def init(
+    zip_code: str = typer.Option(..., "--zip", help="Your ZIP code."),
+    radius: float = typer.Option(25.0, "--radius", help="Search radius in miles."),
+    max_stores: int = typer.Option(2, "--max-stores", help="How many of the nearest stores to watch."),
+    brands: str = typer.Option(
+        "Milwaukee,DEWALT,Makita,Ryobi", help="Brand names, comma separated."
+    ),
+    schedule: bool = typer.Option(True, help="Install the recurring scan on macOS."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="List the stores found; write nothing."),
+) -> None:
+    """Set up from a ZIP code: find the nearest stores and configure them.
+
+    Safe to run again. One store lookup, then the same steps as quick-setup.
+    """
+    from pathlib import Path
+
+    from rich.markup import escape
+
+    from hd.hd_api.stores import InvalidZipCode, StoreLookupError, StoreLookupThrottled
+    from hd.init_flow import run_init
+
+    try:
+        r = asyncio.run(run_init(
+            Path.cwd(), zip_code, radius_miles=radius, max_stores=max_stores,
+            brands=[b.strip() for b in brands.split(",") if b.strip()],
+            install_schedule=schedule, dry_run=dry_run,
+        ))
+    except InvalidZipCode:
+        console.print(f"[red]{escape(zip_code)} is not a ZIP code Home Depot accepts.[/red]")
+        raise typer.Exit(2)
+    except StoreLookupThrottled:
+        console.print("[yellow]Home Depot is rate limiting store lookups. Wait an hour and run this again.[/yellow]")
+        raise typer.Exit(3)
+    except (StoreLookupError, ValueError) as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(2)
+
+    if not r.found:
+        console.print(
+            f"[yellow]No store within {radius:g} miles of {escape(r.zip_code)}. "
+            "Try a larger --radius.[/yellow]"
+        )
+        raise typer.Exit(2)
+    console.print(f"Stores near {escape(r.zip_code)}:")
+    chosen = {s.store_id for s in r.chosen}
+    for s in r.found:
+        mark = "[green]*[/green]" if s.store_id in chosen else " "
+        console.print(f" {mark} {escape(s.label)}")
+    if dry_run or r.setup is None:
+        console.print("[dim]Dry run: nothing written. * marks the stores that would be watched.[/dim]")
+        return
+    known = r.setup.brands_kept + r.setup.brands_added
+    console.print("Brands: " + (escape(", ".join(known)) if known else "none yet"))
+    for name in r.setup.brands_unknown:
+        console.print(f"[yellow]No brand called {escape(repr(name))}; skipped.[/yellow]")
+    if r.setup.brands_pending:
+        when = f" in about {r.setup.wait}" if r.setup.wait else " later"
+        console.print(
+            f"[yellow]Rate limited: brands not looked up yet: {escape(', '.join(r.setup.brands_pending))}. "
+            f"Run `hd init` again{when}.[/yellow]"
+        )
+    for name, ok, detail in r.setup.schedule:
+        console.print(f"[green]Scheduled[/green] {escape(name)}" if ok
+                      else f"[yellow]Schedule not installed ({escape(name)}): {escape(detail)}[/yellow]")
+    if not r.setup.ready:
+        raise typer.Exit(3)
+    console.print("[green]Ready.[/green] Run `hd run-once` for the first scan.")
+
+
 @app.command("quick-setup")
 def quick_setup(
     store: list[str] = typer.Option(
@@ -187,7 +257,7 @@ def install_deals_poll(
         from hd.setup_schedule import _shell
 
         console.print("launchd jobs are macOS only. Add this line with `crontab -e` "
-                      f"(it is 3:00 Eastern on this machine's clock):")
+                      "(it is 3:00 Eastern on this machine's clock):")
         console.print(
             f"{slot.minute} {slot.hour} * * * cd {_shell(root)} && {_shell(hd)} daily-deals "
             f"--wait-for-refresh && {_shell(hd)} notify",

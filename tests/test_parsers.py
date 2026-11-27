@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from hd.hd_api.parsers import parse_products, parse_snapshots, matches_product_line
 from hd.hd_api.models import NormalizedProduct

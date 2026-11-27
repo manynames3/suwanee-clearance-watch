@@ -1,0 +1,36 @@
+# docker compose run --rm scanner hd init --zip 30024 --no-schedule   # once
+# docker compose up -d                                                 # then
+services:
+  scanner:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - ./data:/data
+    environment:
+      SCAN_INTERVAL_HOURS: ${SCAN_INTERVAL_HOURS:-8}
+    env_file:
+      - path: ./.env
+        required: false
+
+  # Optional: serve the phone page on your own network. Browsers only install
+  # a PWA over HTTPS (or localhost), so put a TLS tunnel or reverse proxy in
+  # front of this if you want "Add to Home Screen" on a phone.
+  web:
+    image: nginx:alpine
+    profiles: ["web"]
+    restart: unless-stopped
+    volumes:
+      - ./data/site:/usr/share/nginx/html:ro
+    ports:
+      - "8088:80"
+
+  # Optional: the NiceGUI dashboard.
+  dashboard:
+    build: .
+    profiles: ["dashboard"]
+    restart: unless-stopped
+    command: ["hd", "serve", "--host", "0.0.0.0"]
+    volumes:
+      - ./data:/data
+    ports:
+      - "8080:8080"

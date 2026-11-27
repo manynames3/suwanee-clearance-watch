@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import json
 
 import json as _json
 
 import pytest
 
 from hd.config import Settings
-from hd.http import client as client_mod
 from hd.http.transport import RawResponse, TransportError
 from hd.http.client import (
     HDClient,

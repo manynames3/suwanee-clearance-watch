@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import sqlite3
 
-import pytest
 
 from hd.db.base import freed_space, maybe_vacuum, sqlite_path
 

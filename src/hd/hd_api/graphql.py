@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from hd.config import Settings
 from hd.http.client import FAILURE_KEY, HDClient
 
 

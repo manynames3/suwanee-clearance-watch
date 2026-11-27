@@ -230,7 +230,7 @@ async def create_database(url: str) -> DbCheck:
         if "permission" in message.lower() or "denied" in message.lower():
             return DbCheck(
                 False,
-                f"This user may not create databases.",
+                "This user may not create databases.",
                 f"Ask an admin to run: CREATE DATABASE \"{target}\";",
             )
         return DbCheck(False, message.splitlines()[0][:200], "")

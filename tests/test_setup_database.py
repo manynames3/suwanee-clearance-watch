@@ -9,7 +9,6 @@ and setup prints the URL back on failure.
 
 from __future__ import annotations
 
-import pytest
 
 from hd.config import Settings
 from hd import setup_database as db

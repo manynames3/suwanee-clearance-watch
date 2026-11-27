@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
 
 from hd.grouping import (
     GROUP_WINDOW_MINUTES as _GROUP_WINDOW_MINUTES,

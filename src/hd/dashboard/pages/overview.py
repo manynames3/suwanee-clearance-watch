@@ -15,8 +15,6 @@ from nicegui import ui
 
 from hd.dashboard import _state
 from hd.dashboard.components.formatters import (
-    fmt_history_span,
-    fmt_low_date,
     fmt_ts_relative,
 )
 from hd.dashboard.components.cards import online_card_html as _online_card_html

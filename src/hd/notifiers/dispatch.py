@@ -7,7 +7,7 @@ from typing import Any
 
 from hd.config import Settings
 from hd.logging import get_logger
-from hd.notifiers.base import Notification
+from hd.notifiers.base import Notification, Notifier
 from hd.notifiers.channels import ALL_NOTIFIERS
 from hd.notifiers.dedupe import SentLog
 from hd.notifiers.rules import parse_rules, select
@@ -33,7 +33,7 @@ async def dispatch_alerts(
     alerts: list[dict[str, Any]],
     *,
     store_names: dict[str, str] | None = None,
-    notifiers=None,
+    notifiers: list[Notifier] | None = None,
 ) -> DispatchResult:
     """Apply rules and dedupe, then send one batch per enabled channel.
 
@@ -41,7 +41,8 @@ async def dispatch_alerts(
     delivery failure retries on the next scan instead of losing the deal.
     """
     result = DispatchResult()
-    channels = [n for n in (notifiers or ALL_NOTIFIERS) if n.enabled(settings)]
+    candidates: list[Notifier] = notifiers if notifiers is not None else list(ALL_NOTIFIERS)
+    channels = [n for n in candidates if n.enabled(settings)]
     if not channels:
         return result
 

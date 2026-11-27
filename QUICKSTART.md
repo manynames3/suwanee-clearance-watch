@@ -1,54 +1,67 @@
-# Suwanee Clearance Watch — quick start
+# Clearance Watch: quick start
 
-A personal fork of [KenStager/HDScanner](https://github.com/KenStager/HDScanner)
-(MIT) with four additions: a SKU watchlist, a dollar floor on alerts, a daily
-Markdown digest, and a phone deals page.
+Five minutes from nothing to a scanner watching the stores near you. It logs in to
+nothing and buys nothing.
 
-The scanner runs on your Mac. Nothing here logs in to Home Depot or buys anything.
-
-## Install (once)
+## 1. Install
 
 ```bash
 git clone https://github.com/manynames3/suwanee-clearance-watch.git
 cd suwanee-clearance-watch
-./mac-setup.sh
+./mac-setup.sh 30024        # your ZIP code (macOS)
 ```
 
-The script asks no questions. It installs the scanner, writes stores 1754 and
-6978, looks up four brands (Milwaukee, DEWALT, Makita, Ryobi), installs three
-scans a day, turns on the dollar floor and the phone page, logs in to
-Cloudflare, and runs the first scan.
+On Linux, or if you prefer to do it by hand:
 
-If Home Depot rate limits the brand lookup, the script says so and stops
-early. Run it again in about an hour; it only redoes what is missing.
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dashboard]"
+hd init --zip 30024 --radius 25 --no-schedule
+```
 
-Different brands: `BRANDS_WANTED="Milwaukee,Ryobi" ./mac-setup.sh`
+`hd init` looks up the nearest stores once, writes them with their addresses, resolves
+your brands (default: Milwaukee, DEWALT, Makita, Ryobi) and installs three scans a day on
+macOS. Use `--dry-run` first to see which stores it would watch, `--max-stores 3` for
+more, `--brands "Ryobi,Craftsman"` for others. If Home Depot rate limits the brand
+lookup it says so; run the same command again later and it only redoes what's missing.
 
-To scan by hand at any time: `source .venv/bin/activate && hd run-once`.
+Docker instead: `docker compose run --rm scanner hd init --zip 30024 --no-schedule`
+then `docker compose up -d`.
 
-After each scan:
+## 2. First scan
 
-- **Phone page:** https://clearance-watch.hangi87.workers.dev — deals by store,
-  biggest saving first. Anyone who has the address can open it.
-- **Digest:** `~/clearance-digest-YYYY-MM-DD.md`, one section per scan.
+```bash
+hd run-once      # 10 to 30 minutes, paced on purpose
+hd alerts
+```
 
-A scan that was throttled or cut short says `HEALTH_DEGRADED` in both places
-and lists what it could not read. It never reports "no deals" in that case.
+The first run mostly records a baseline; deal alerts start from the second.
 
-## Watchlist
+## 3. Get notified (optional)
 
-`watchlist.txt` holds Home Depot item ids (the "Internet #" on a product
-page), one per line. Each is checked at every store on every scan, whatever
-its brand. Up to 40 items.
+Add any of these to `.env` (see `.env.example`), then run `hd notify-test`:
 
-## Settings added by this fork
+```
+NTFY_TOPIC=a-long-random-topic        # ntfy.sh app on your phone
+NOTIFY_RULES=[{"min_percent_off": 50, "min_confidence": 60}]
+```
 
-| `.env` name | What it does | Default |
-|---|---|---|
-| `WATCHLIST_PATH` | Where the watchlist file is | `watchlist.txt` |
-| `WATCHLIST_MAX_ITEMS` | Most items checked per scan | `40` |
-| `MIN_DOLLAR_OFF` | Hide deals that save less than this | `0` (off) |
-| `DIGEST_DIR` | Folder for the daily digest | `~` |
-| `SITE_WORKER` | Cloudflare Worker that serves the phone page | empty (off) |
+Pushover, Discord, Telegram, email and Slack work the same way.
 
-Everything else is documented in `README.md`.
+## 4. Phone page (optional)
+
+Every run writes an installable page to `.site_out/`. To publish it, set
+`SITE_WORKER=<a-cloudflare-worker-name>` (needs Node.js and one `npx wrangler login`), or
+serve the folder yourself. Open it on your phone and choose Add to Home Screen.
+
+## Good to know
+
+- `watchlist.txt`: item ids ("Internet #") priced at every store each scan, up to 40.
+- `MIN_DOLLAR_OFF`: hide deals that save less than this. Default 0.
+- `hd doctor`: what's wrong, `hd doctor --network`: what kind of request trouble it is.
+- `hd canary`: has Home Depot's response shape changed?
+- A scan that was throttled or cut short says `HEALTH_DEGRADED` and lists what it
+  couldn't read. It never reports "no deals" in that case.
+- Prices and stock are estimates. Verify in store.
+
+Everything else: [docs/REFERENCE.md](docs/REFERENCE.md).

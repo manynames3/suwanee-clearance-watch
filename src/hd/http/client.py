@@ -19,7 +19,6 @@ from hd.http.cooldown import ThrottleCooldown
 from hd.http.metrics import RequestMetrics
 from hd.http.transport import (
     CurlTransport,
-    RawResponse,
     Transport,
     TransportError,
 )

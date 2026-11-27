@@ -554,7 +554,6 @@ def _both_ends(settings: Settings) -> Settings:
 
 class TestBothEndsPlanning:
     def test_cap_is_two_ends_minus_overlap(self, browse_settings):
-        from hd.pipeline.browse import both_ends_cap
         assert reachable_cap(_both_ends(browse_settings)) == 6
         assert both_ends_cap(browse_settings) == 10   # 2*6 - 1*2
 
@@ -1174,7 +1173,6 @@ class TestShelfCategoryWalks:
 
 # ---------------------------------------------------------------- coverage records
 
-from hd.pipeline.browse import walk_status
 
 
 class TestWalkStatus:
@@ -1874,7 +1872,6 @@ class TestShelfCursorRewind:
         it and let it come round again on its own turn.
         """
         from hd.db import base
-        from hd import rotation
 
         await base.init_db(browse_settings)
         s = self._settings(browse_settings, ceiling=500)   # budget is not the issue
@@ -2805,7 +2802,6 @@ class TestRecordedSplitStandsInForMissingFacets:
         facets. Nothing is re-walked."""
         from hd.db import base
         from hd.db.models import WalkCoverage
-        from hd.pipeline.browse import _record_walk
 
         await base.init_db(browse_settings)
         now = datetime.now(timezone.utc)
@@ -2823,7 +2819,7 @@ class TestRecordedSplitStandsInForMissingFacets:
         walked = []
 
         def router(v):
-            nav, start = v["navParam"], v["startIndex"]
+            nav = v["navParam"]
             if nav == "N-5yc1vZzv":          # root: one over-cap category
                 return make_page([], 10, dims=[cat_dim(("Big", "big", 10))])
             if nav == "N-5yc1vZzvZbig":      # facets: price only this run
@@ -2996,7 +2992,7 @@ class TestShelfHoldOutIsEnforcedByTheRun:
         await base.init_db(s)
 
         def router(v):
-            nav, start = v["navParam"], v["startIndex"]
+            start = v["startIndex"]
             return make_page([make_product("111")], 1) if start == 0 else make_page([], 1)
 
         await run_browse(s, client=FakeClient(router), tiers=("shelf",))

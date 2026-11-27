@@ -12,7 +12,6 @@ from typing import Any
 from urllib.parse import quote
 
 from sqlalchemy import and_, case, desc, func, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from hd.config import Settings
 from hd.logging import get_logger

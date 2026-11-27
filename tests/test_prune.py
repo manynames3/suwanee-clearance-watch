@@ -11,7 +11,7 @@ from sqlalchemy import select, func, delete
 
 from hd.config import Settings
 from hd.db.base import Database
-from hd.db.models import Base, StoreSnapshot
+from hd.db.models import StoreSnapshot
 
 
 @pytest.fixture

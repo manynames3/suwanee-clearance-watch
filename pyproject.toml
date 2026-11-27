@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hd-clearance-monitor"
-version = "0.2.0"
+version = "0.3.0"
 description = "Track Home Depot clearance, price drops and stock for any brand at your local stores"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -38,3 +38,40 @@ where = ["src"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# Correctness only: syntax errors, undefined names, unused imports/variables.
+select = ["E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# These modules re-export names so older imports keep working.
+"src/hd/pipeline/browse.py" = ["F401"]
+"src/hd/dashboard/queries.py" = ["F401"]
+"src/hd/cli/__init__.py" = ["F401"]
+"src/hd/setup_wizard.py" = ["F401"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+follow_imports = "silent"
+# Type-checked strictly where the code is new; older modules are covered by tests.
+files = [
+  "src/hd/notifiers/base.py",
+  "src/hd/notifiers/channels.py",
+  "src/hd/notifiers/rules.py",
+  "src/hd/notifiers/dedupe.py",
+  "src/hd/notifiers/dispatch.py",
+  "src/hd/retailers",
+  "src/hd/hd_api/schema.py",
+  "src/hd/init_flow.py",
+  "src/hd/pipeline/confidence.py",
+  "src/hd/pipeline/tiering.py",
+  "src/hd/pipeline/normalizer.py",
+  "src/hd/http/softblock.py",
+  "src/hd/http/rate_limit.py",
+  "src/hd/network_doctor.py",
+]

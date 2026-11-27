@@ -173,7 +173,7 @@ def doctor(
     if failed:
         console.print(f"\n[red]{failed} failing, {warned} warning[/red]")
         raise typer.Exit(code=1)
-    console.print(f"\n[green]All clear[/green]" if not warned else f"\n[yellow]{warned} warning(s)[/yellow]")
+    console.print("\n[green]All clear[/green]" if not warned else f"\n[yellow]{warned} warning(s)[/yellow]")
 
 
 @app.command()
@@ -261,7 +261,6 @@ def notify(
             console.print("[yellow]Invalid cursor file, using --since fallback.[/yellow]")
 
     async def _notify():
-        from datetime import datetime, timedelta, timezone
 
         from hd.db.base import init_db as _init_tables, close_db
         from hd.db.repository import get_alerts
@@ -445,3 +444,44 @@ def notify_test() -> None:
         return 1 if failed else 0
 
     raise typer.Exit(_run(_test()))
+
+
+@app.command()
+def canary() -> None:
+    """Check that Home Depot's response shape still matches what the scanner reads.
+
+    Sends one ordinary search request (and honours any active cooldown), then
+    validates the structure. Exit 0 = shape ok, 1 = shape drifted, 3 = no usable
+    response (rate limited or refused; nothing is retried).
+    """
+    setup_logging()
+    settings = Settings()
+
+    async def _canary() -> int:
+        from hd.hd_api.graphql import failure_reason, is_valid_search_response
+        from hd.hd_api.schema import check_search_response
+        from hd.http.client import HDClient
+        from hd.retailers import get_adapter
+
+        if not settings.store_list:
+            console.print("[yellow]No store configured. Run `hd init --zip YOUR_ZIP` first.[/yellow]")
+            return 3
+        client = HDClient(settings, request_budget=1)
+        try:
+            raw = await get_adapter().browse_category(
+                client, store_id=settings.store_list[0], keyword="drill", page_size=24
+            )
+        finally:
+            await client.close()
+        if not is_valid_search_response(raw):
+            console.print(f"[yellow]No usable response ({failure_reason(raw) or 'invalid'}). "
+                          "Not retrying. Try again later.[/yellow]")
+            return 3
+        report = check_search_response(raw)
+        if report.ok:
+            console.print(f"[green]{report.summary()}[/green]")
+            return 0
+        console.print(f"[red]{report.summary()}[/red]")
+        return 1
+
+    raise typer.Exit(_run(_canary()))

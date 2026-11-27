@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from hd.pipeline.health import check_drift, HealthStatus, _resolve_path
 

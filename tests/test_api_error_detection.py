@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from hd.config import Settings
 from hd.db.base import Database
-from hd.db.models import Alert, AlertType, Base
+from hd.db.models import Alert, AlertType
 from hd.hd_api.graphql import is_valid_search_response
 from hd.http.client import CircuitBreaker
 

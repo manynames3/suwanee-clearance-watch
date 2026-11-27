@@ -12,7 +12,6 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-import pytest
 
 from hd.setup_schedule import (
     ScheduleSlot,

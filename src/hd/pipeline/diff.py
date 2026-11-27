@@ -351,8 +351,6 @@ async def run_diff(settings: Settings) -> list[Alert]:
             if r.max_price is not None
         }
 
-        now = datetime.now(timezone.utc)
-
         for store_id, item_id in pairs:
 
             # Fetch recent snapshots and deduplicate by timestamp
