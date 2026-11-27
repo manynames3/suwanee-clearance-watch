@@ -96,12 +96,46 @@ def parse_snapshots(
                 in_stock=inventory.get("isInStock") if inventory else None,
                 limited_qty=inventory.get("isLimitedQuantity") if inventory else None,
                 out_of_stock=inventory.get("isOutOfStock") if inventory else None,
+                bopis_state=bopis_state(item, store_id),
                 raw=item,
             ))
         except (AttributeError, TypeError):
             continue
 
     return snapshots
+
+
+def bopis_state(item: dict, store_id: str) -> str | None:
+    """Online-pickup state of an item at one store.
+
+    active       pickup service present, in stock, not flagged limited
+    limited      pickup present and flagged limited quantity
+    unavailable  pickup present but out of stock / unavailable (NOT a penalty on
+                 its own: clearance items are not sold online, so this reads
+                 unavailable for units that are physically on the shelf)
+    none         no pickup service for this store
+    None         no fulfillment data at all
+    """
+    try:
+        options = (item.get("fulfillment") or {}).get("fulfillmentOptions")
+        if options is None:
+            return None
+        for option in options:
+            for service in (option or {}).get("services") or []:
+                if str((service or {}).get("type") or "").lower() != "bopis":
+                    continue
+                for loc in (service or {}).get("locations") or []:
+                    if str((loc or {}).get("locationId", "")) != str(store_id):
+                        continue
+                    inv = (loc or {}).get("inventory") or {}
+                    if inv.get("isLimitedQuantity"):
+                        return "limited"
+                    if inv.get("isOutOfStock") or inv.get("isUnavailable") or inv.get("isInStock") is False:
+                        return "unavailable"
+                    return "active"
+        return "none"
+    except (AttributeError, TypeError):
+        return None
 
 
 def _extract_inventory(item: dict, store_id: str) -> dict | None:

@@ -60,6 +60,17 @@
     display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
     text-transform: uppercase; color: var(--good); margin-left: 6px;
   }
+  .badge {
+    display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px;
+    border-radius: 999px; margin-left: 6px; vertical-align: middle;
+    border: 1px solid var(--line); color: var(--muted);
+  }
+  .badge.high { color: var(--good); border-color: var(--good); }
+  .badge.low { color: var(--warn-ink); border-color: var(--warn-line); background: var(--warn-bg); }
+  .flag { color: var(--warn-ink); background: var(--warn-bg); border-radius: 4px;
+    padding: 1px 6px; font-size: 12px; }
+  .filter { display: flex; align-items: center; gap: 8px; margin: 0 0 14px;
+    font-size: 14px; color: var(--muted); }
   .empty { color: var(--muted); padding: 28px 0; text-align: center; }
   footer { color: var(--muted); font-size: 12px; margin-top: 28px; }
 </style>
@@ -69,6 +80,8 @@
   <h1>Clearance Watch</h1>
   <p class="sub" id="sub">Loading the latest scan…</p>
   <div id="banners"></div>
+  <label class="filter" id="filter" hidden><input type="checkbox" id="nobs" checked>
+    <span id="nobs-label">Hide low-confidence stock</span></label>
   <div class="tabs" id="tabs" role="tablist"></div>
   <div id="deals"></div>
   <footer id="foot"></footer>
@@ -111,19 +124,29 @@
   };
 
   var data = null, current = null;
+  var hideLow = true;
+  try { if (localStorage.getItem("hideLow") === "0") hideLow = false; } catch (e) {}
+
+  function visible(store) {
+    if (!hideLow || !data.no_bs || !data.no_bs.enabled) return store.deals;
+    return store.deals.filter(function (d) {
+      return !d.confidence || d.confidence.score >= data.no_bs.minimum;
+    });
+  }
 
   function renderDeals() {
     var box = $("deals");
     box.textContent = "";
     var store = data.stores.filter(function (s) { return s.id === current; })[0];
     if (!store) return;
-    if (!store.deals.length) {
+    var deals = visible(store);
+    if (!deals.length) {
       box.appendChild(el("p", "empty", data.run.degraded.length
         ? "Nothing listed for this store, but the last scan was incomplete."
         : "No clearance deals recorded at this store right now."));
       return;
     }
-    store.deals.forEach(function (d) {
+    deals.forEach(function (d) {
       var a = el("a", "deal");
       // Only ever link to Home Depot.
       if (/^https:\/\/www\.homedepot\.com\//.test(d.url || "")) {
@@ -136,6 +159,12 @@
       var body = el("div", "body");
       var title = el("p", "title", d.title);
       if (d.is_new) title.appendChild(el("span", "tag", "New"));
+      if (d.confidence) {
+        var c = d.confidence;
+        var bd = el("span", "badge " + c.label.toLowerCase(), c.label + " " + c.score);
+        bd.title = (c.tags || []).join(" · ");
+        title.appendChild(bd);
+      }
       body.appendChild(title);
       var line = el("div");
       line.appendChild(el("span", "price", money(d.price) || "Price unknown"));
@@ -150,6 +179,20 @@
         : (d.in_stock ? "In stock, quantity not reported" : "Stock unknown");
       body.appendChild(el("div", "meta",
         stock + " · item " + d.item_id + " · read " + when(d.retrieved_at)));
+      var extra = [];
+      if (d.cadence && d.cadence.ending && d.cadence.label) {
+        extra.push("price ends " + d.cadence.ending + " (" + d.cadence.label +
+          (d.cadence.days_at_price != null ? ", " + d.cadence.days_at_price + " d at this price" : "") + ")");
+      }
+      if (d.confidence && d.confidence.tags && d.confidence.tags.length) {
+        extra.push(d.confidence.tags.join(", "));
+      }
+      if (extra.length) body.appendChild(el("div", "meta", extra.join(" · ")));
+      if (d.context && d.context.inflated) {
+        body.appendChild(el("div", "flag", "Inflated discount: " + d.context.claimed_pct +
+          "% off the listed price, but only " + d.context.true_pct + "% off its usual " +
+          money(d.context.typical_price)));
+      }
       a.appendChild(body);
       box.appendChild(a);
     });
@@ -160,7 +203,7 @@
     tabs.textContent = "";
     data.stores.forEach(function (s) {
       var b = el("button", null,
-        (s.name || "Store") + " #" + s.id + " (" + s.deals.length + ")");
+        (s.name || "Store") + " #" + s.id + " (" + visible(s).length + ")");
       b.setAttribute("role", "tab");
       b.setAttribute("aria-selected", String(s.id === current));
       b.onclick = function () { current = s.id; renderTabs(); renderDeals(); };
@@ -193,6 +236,15 @@
         banner("The last scan did not see everything", reasons);
       }
       current = d.stores.length ? d.stores[0].id : null;
+      if (d.no_bs && d.no_bs.enabled) {
+        $("filter").hidden = false;
+        $("nobs").checked = hideLow;
+        $("nobs").onchange = function () {
+          hideLow = this.checked;
+          try { localStorage.setItem("hideLow", hideLow ? "1" : "0"); } catch (e) {}
+          renderTabs(); renderDeals();
+        };
+      }
       renderTabs();
       renderDeals();
       var foot = d.run.snapshots + " price readings · " + d.run.requests + " requests";

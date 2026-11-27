@@ -91,6 +91,71 @@ def apply_dollar_floor(alerts: list[Alert], min_dollar_off: float) -> list[Alert
     return kept
 
 
+async def apply_no_bs(settings: Settings, alerts: list[Alert]) -> list[Alert]:
+    """No-BS mode for alerts: attach a stock-confidence score to deal alerts and
+    drop the ones that score under the minimum.
+
+    Only deal-type alerts are judged; stock, pricing-error and health alerts
+    pass untouched. Fails open: if scoring itself breaks, every alert is kept —
+    a missing alert is worse than an unscored one.
+    """
+    from hd.db.models import Product
+    from hd.db.stock_confidence import assess_deals
+    from hd.pipeline.confidence import passes_no_bs, StockConfidence
+
+    judged = [a for a in alerts if a.alert_type in _FLOORED_TYPES]
+    if not judged:
+        return alerts
+    try:
+        async with get_session(settings) as session:
+            ids = sorted({a.item_id for a in judged})
+            titles = {
+                row.item_id: row.title
+                for row in (
+                    await session.execute(select(Product).where(Product.item_id.in_(ids)))
+                ).scalars()
+            }
+        deals = []
+        for a in judged:
+            after = (a.payload or {}).get("after") or {}
+            deals.append({
+                "store_id": a.store_id,
+                "item_id": a.item_id,
+                "title": titles.get(a.item_id),
+                "qty": after.get("inventory_qty"),
+                "in_stock": after.get("in_stock"),
+                "clearance_value": after.get("clearance_value") or after.get("price_value"),
+                "online_price": after.get("price_value"),
+            })
+        assessed = await assess_deals(settings, deals)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Stock confidence unavailable for alerts — keeping all", error=str(exc))
+        return alerts
+
+    kept: list[Alert] = []
+    dropped = 0
+    for a in alerts:
+        info = assessed.get((a.store_id, a.item_id)) if a.alert_type in _FLOORED_TYPES else None
+        if info is None:
+            kept.append(a)
+            continue
+        conf = info["confidence"]
+        # Stamp the evidence on the alert so a digest or message can show it.
+        a.payload = {**(a.payload or {}), "confidence": conf,
+                     "cadence": info["cadence"], "context": info["context"]}
+        if settings.no_bs_mode and not passes_no_bs(
+            StockConfidence(conf["score"], conf["label"], conf["tags"]),
+            settings.min_stock_confidence,
+        ):
+            dropped += 1
+            continue
+        kept.append(a)
+    if dropped:
+        log.info("Low-confidence deal alerts dropped (No-BS mode)", dropped=dropped,
+                 minimum=settings.min_stock_confidence)
+    return kept
+
+
 async def write_alerts(settings: Settings, alerts: list[Alert]) -> int:
     """Bulk insert alerts into the database with content-based deduplication.
 
@@ -108,7 +173,7 @@ async def write_alerts(settings: Settings, alerts: list[Alert]) -> int:
             "Alerts under the dollar floor dropped",
             dropped=len(alerts) - len(floored), min_dollar_off=settings.min_dollar_off,
         )
-    alerts = floored
+    alerts = await apply_no_bs(settings, floored)
     if not alerts:
         return 0
 

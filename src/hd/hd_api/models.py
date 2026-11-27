@@ -37,4 +37,7 @@ class NormalizedSnapshot:
     in_stock: bool | None = None
     limited_qty: bool | None = None
     out_of_stock: bool | None = None
+    # Pickup state at this store: active | limited | unavailable | none. Derived
+    # from the fulfillment options at parse time; not stored on the snapshot row.
+    bopis_state: str | None = None
     raw: dict = field(default_factory=dict)

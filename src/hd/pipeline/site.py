@@ -60,6 +60,10 @@ def _deal_row(deal: dict[str, Any]) -> dict[str, Any]:
         "in_stock": bool(deal.get("in_stock")),
         "is_new": bool(deal.get("is_new")),
         "retrieved_at": _iso(deal.get("snapshot_ts")),
+        "upc": deal.get("upc"),
+        "confidence": deal.get("confidence"),
+        "cadence": deal.get("cadence"),
+        "context": deal.get("context"),
     }
 
 
@@ -67,7 +71,9 @@ async def build_site_data(settings: Settings, report: RunReport | None) -> dict[
     """Everything the page shows: the run's health and each store's deals."""
     from hd.dashboard.queries import get_deal_board
 
-    board = await get_deal_board(settings)
+    # Every deal goes to the page, scored. Hiding low-confidence ones is the
+    # reader's default-on toggle, so the evidence stays inspectable.
+    board = await get_deal_board(settings, include_low_confidence=True)
     floor = settings.min_dollar_off
     stores = []
     for store_id in settings.store_list:
@@ -91,7 +97,12 @@ async def build_site_data(settings: Settings, report: RunReport | None) -> dict[
             "degraded": list(report.degraded),
             "notes": list(report.notes),
         }
-    return {"run": run, "min_dollar_off": floor, "stores": stores}
+    return {
+        "run": run,
+        "min_dollar_off": floor,
+        "no_bs": {"enabled": settings.no_bs_mode, "minimum": settings.min_stock_confidence},
+        "stores": stores,
+    }
 
 
 def carry_forward(data: dict[str, Any], previous_path: Path) -> None:

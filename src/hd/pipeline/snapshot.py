@@ -277,6 +277,37 @@ async def _paginate_and_snapshot(
     return inserted
 
 
+async def _record_fulfillment(session, store_id: str, snapshots: list, now: datetime) -> None:
+    """Keep the latest pickup state per item. Best effort: never fails a scan."""
+    from hd.db.models import ItemFulfillment
+
+    states = {s.item_id: s.bopis_state for s in snapshots if getattr(s, "bopis_state", None)}
+    if not states:
+        return
+    try:
+        existing = {
+            row.item_id: row
+            for row in (
+                await session.execute(
+                    select(ItemFulfillment).where(
+                        ItemFulfillment.store_id == store_id,
+                        ItemFulfillment.item_id.in_(list(states)),
+                    )
+                )
+            ).scalars()
+        }
+        for item_id, state in states.items():
+            row = existing.get(item_id)
+            if row is None:
+                session.add(ItemFulfillment(
+                    store_id=store_id, item_id=item_id, bopis_state=state, updated_ts=now
+                ))
+            else:
+                row.bopis_state, row.updated_ts = state, now
+    except Exception as exc:  # noqa: BLE001 — a fulfillment note must not cost a scan
+        log.warning("Could not record pickup state", error=str(exc))
+
+
 async def _insert_snapshots(
     settings: Settings,
     matched_snapshots: list,
@@ -316,6 +347,8 @@ async def _insert_snapshots(
                 out_of_stock=snap.out_of_stock,
                 raw_json=snap.raw,
             ))
+
+        await _record_fulfillment(session, store_id, matched_snapshots, now)
 
         # Fold into the durable aggregate in the same transaction — these stats
         # outlive the snapshots above, which prune deletes at retention age.

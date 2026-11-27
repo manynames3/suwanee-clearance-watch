@@ -161,6 +161,25 @@ class Alert(Base):
     payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
+class ItemFulfillment(Base):
+    """Latest online-pickup state per (store, item).
+
+    A separate small table rather than a new column on store_snapshots: adding
+    a column would break every existing database (create_all never alters a
+    table), and snapshots are append-only. This table is additive, so old
+    databases simply gain it on the next `hd init-db` or scan.
+    """
+
+    __tablename__ = "item_fulfillment"
+
+    store_id: Mapped[str] = mapped_column(String(10), primary_key=True)
+    item_id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    bopis_state: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    updated_ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+
 class ItemPriceStat(Base):
     """Durable per-(store, item) price facts that outlive snapshot pruning.
 

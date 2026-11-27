@@ -166,3 +166,101 @@ async def backfill(settings: Settings, chunk_size: int = 50_000) -> tuple[int, i
 
     log.info("Backfill complete", scanned=scanned, items=len(folded))
     return scanned, len(folded)
+
+
+# --- markdown cadence and true-discount context ------------------------------
+#
+# Home Depot encodes how far along a markdown is in the last two digits of the
+# price. The ladder runs .00 (regular) -> .06 -> .03 -> .02 -> .01. A pricing
+# convention observed by shoppers, not something the API states, so it is
+# reported as a hint ("ending .03") and never as a fact about the item.
+
+from statistics import median as _median
+
+MARKDOWN_ENDINGS: dict[int, tuple[int, str]] = {
+    0: (0, "regular"),
+    6: (1, "first markdown"),
+    3: (2, "second markdown"),
+    2: (3, "deep markdown"),
+    1: (4, "final markdown"),
+}
+
+# A claimed discount this many points deeper than the real one is "inflated".
+INFLATED_GAP_POINTS = 20
+
+
+def markdown_ending(price: float | Decimal | None) -> dict | None:
+    """Cadence stage implied by a price's cents, or None when it follows no ladder."""
+    if price is None:
+        return None
+    cents = int(round(float(price) * 100)) % 100
+    last_two = cents
+    if last_two in MARKDOWN_ENDINGS:
+        stage, label = MARKDOWN_ENDINGS[last_two]
+        return {"ending": f".{last_two:02d}", "stage": stage, "label": label}
+    return {"ending": f".{last_two:02d}", "stage": None, "label": "off-ladder"}
+
+
+def days_at_current_price(
+    readings: Sequence[tuple[datetime, float | Decimal | None]],
+    now: datetime | None = None,
+) -> int | None:
+    """Whole days the latest price has been unchanged, by the readings we hold.
+
+    A lower bound: it counts from the first reading at this price, and we may
+    have started watching after the price was set.
+    """
+    priced = sorted(
+        ((_naive_utc(t), float(p)) for t, p in readings if p is not None),
+        key=lambda pair: pair[0],
+    )
+    if not priced:
+        return None
+    current = priced[-1][1]
+    since = priced[-1][0]
+    for ts, price in reversed(priced):
+        if abs(price - current) > 0.005:
+            break
+        since = ts
+    ref = _naive_utc(now) if now else _naive_utc(datetime.now(timezone.utc))
+    return max(0, (ref - since).days)
+
+
+def median_price(prices: Sequence[float | Decimal | None]) -> float | None:
+    values = [float(p) for p in prices if p is not None]
+    return float(_median(values)) if values else None
+
+
+def discount_context(
+    current: float | Decimal | None,
+    msrp: float | Decimal | None,
+    typical: float | Decimal | None,
+    sample_days: int | None = None,
+) -> dict:
+    """How the headline discount compares with what the item usually sells for.
+
+    `typical` should be the median of readings we hold (capped to the raw
+    window we still have); the label says how many days that covers. When the
+    claimed discount off MSRP is far deeper than the discount off the typical
+    price, the markdown is flagged as inflated: the "was" price is not a price
+    anyone was paying.
+    """
+    if current is None:
+        return {"claimed_pct": None, "true_pct": None, "inflated": False}
+    cur = float(current)
+    claimed = None
+    if msrp and float(msrp) > 0 and float(msrp) > cur:
+        claimed = round((float(msrp) - cur) / float(msrp) * 100)
+    true = None
+    if typical and float(typical) > 0:
+        true = round((float(typical) - cur) / float(typical) * 100)
+    inflated = bool(
+        claimed is not None and true is not None and claimed - true >= INFLATED_GAP_POINTS
+    )
+    return {
+        "claimed_pct": claimed,
+        "true_pct": true,
+        "typical_price": round(float(typical), 2) if typical else None,
+        "typical_days": sample_days,
+        "inflated": inflated,
+    }

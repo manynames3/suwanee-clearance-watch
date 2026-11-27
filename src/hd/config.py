@@ -398,6 +398,17 @@ class Settings(BaseSettings):
     network_tier_min_interval_hours: float = 24.0
     tier_state_path: str = ".hd_tier_state.json"
 
+    # Real Stock Confidence and "No-BS mode". Deals scoring under the minimum are
+    # hidden from the dashboard, the phone page, digests and alerts unless the
+    # reader turns the filter off. See hd.pipeline.confidence for the rules.
+    no_bs_mode: bool = True
+    min_stock_confidence: int = Field(default=40, ge=0, le=100)
+    confidence_history_days: int = Field(default=21, ge=1)
+    # Stage-2 probe: re-read the strongest candidate deals one by one just
+    # before alerting, so a deal is announced on fresh stock. 0 disables it.
+    probe_min_percent_off: int = Field(default=45, ge=0, le=100)
+    probe_max_per_run: int = Field(default=8, ge=0)
+
     # Baseline instrumentation. Each run appends one summary line (success
     # rate, latency percentiles, status/outcome counts) so the API's behaviour
     # can be characterised across runs — a single run is far too small a

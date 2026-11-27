@@ -113,10 +113,22 @@ def format_alert(row: dict[str, Any]) -> str:
     url = p.get("product_url")
     item = f"[{row.get('item_id')}]({url})" if url else str(row.get("item_id"))
 
-    return (
+    line = (
         f"- {row.get('alert_type')} · {title} · item {item} · store {store} · "
         f"{price} · {stock} · retrieved {_et(row.get('retrieved_at'))}"
     )
+    conf = p.get("confidence")
+    if conf and conf.get("score") is not None:
+        line += f" · stock confidence {conf.get('label', '')} {conf['score']}"
+        if conf.get("tags"):
+            line += f" ({', '.join(conf['tags'])})"
+    ctx = p.get("context") or {}
+    if ctx.get("inflated"):
+        line += (
+            f" · INFLATED: {ctx.get('claimed_pct')}% off the listed price but "
+            f"{ctx.get('true_pct')}% off its usual {_money(ctx.get('typical_price'))}"
+        )
+    return line
 
 
 def render_section(report: RunReport, rows: list[dict[str, Any]]) -> str:

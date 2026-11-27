@@ -637,7 +637,10 @@ def run_once(
             base_budget = settings.request_budget
         shared_client = HDClient(
             settings,
-            request_budget=base_budget + watch_allowance if base_budget > 0 else 0,
+            request_budget=(
+                base_budget + watch_allowance + settings.probe_max_per_run
+                if base_budget > 0 else 0
+            ),
         )
         product_count = 0
         snapshot_count = 0
@@ -754,6 +757,16 @@ def run_once(
                     store_ids=settings.store_list,
                     client=shared_client,
                 )
+            if settings.probe_max_per_run > 0 and not shared_client.is_throttled:
+                from hd.pipeline.probe import run_probe
+
+                probe = await run_probe(settings, shared_client, now=report.started)
+                snapshot_count += probe.refreshed
+                if probe.candidates:
+                    report.notes.append(
+                        f"Re-read {probe.refreshed} of {len(probe.candidates)} top deal(s) "
+                        "individually just before alerting."
+                    )
             log.info("Scan complete", products=product_count, rows=snapshot_count, requests=shared_client.request_count)
         except Exception as exc:
             # A crashed run still leaves a digest entry saying it saw nothing

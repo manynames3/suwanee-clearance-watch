@@ -15,7 +15,9 @@ from sqlalchemy import and_, case, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hd.config import Settings
+from hd.logging import get_logger
 from hd.db.base import get_session
+from hd.db.stock_confidence import assess_deals
 from hd.db.models import (
     Alert,
     AlertType,
@@ -27,6 +29,8 @@ from hd.db.models import (
     Store,
     StoreSnapshot,
 )
+
+log = get_logger("dashboard.queries")
 
 
 def _latest_snapshots_subquery():
@@ -556,7 +560,9 @@ async def get_store_summary(settings: Settings) -> list[dict[str, Any]]:
         return summaries
 
 
-async def get_deal_board(settings: Settings) -> dict[str, Any]:
+async def get_deal_board(
+    settings: Settings, include_low_confidence: bool = False
+) -> dict[str, Any]:
     """Current actionable deals per store for the Deal Board landing page.
 
     A deal is a latest snapshot with an actionable in-store clearance price
@@ -586,6 +592,7 @@ async def get_deal_board(settings: Settings) -> dict[str, Any]:
                 Product.canonical_url,
                 Product.image_url,
                 first_deal_sub.c.first_deal_ts,
+                Product.upc,
             )
             .join(
                 latest_sub,
@@ -623,7 +630,7 @@ async def get_deal_board(settings: Settings) -> dict[str, Any]:
 
     now = datetime.now(timezone.utc)
     deals_by_store: dict[str, list[dict[str, Any]]] = {}
-    for snap, title, canonical_url, image_url, first_deal_ts in rows:
+    for snap, title, canonical_url, image_url, first_deal_ts, upc in rows:
         clearance = float(snap.clearance_value)
         online = float(snap.price_value) if snap.price_value is not None else None
         pct = snap.clearance_percentage_off
@@ -649,11 +656,42 @@ async def get_deal_board(settings: Settings) -> dict[str, Any]:
             "first_seen_ts": first_deal_ts,
             "is_new": bool(first_deal_ts and (now - first_deal_ts) <= timedelta(hours=24)),
             "snapshot_ts": snap.ts,
+            "msrp": float(snap.price_original) if snap.price_original is not None else None,
+            "upc": upc,
         })
 
     # Every configured store gets a tab, even with zero deals — absence is data
     for sid in settings.store_list:
         deals_by_store.setdefault(sid, [])
+
+    # Real Stock Confidence. Scored from the snapshot history, then — in No-BS
+    # mode — low-confidence deals are set aside rather than shown. They are
+    # returned under "low_confidence" so a surface can offer to show them.
+    low_by_store: dict[str, list[dict[str, Any]]] = {sid: [] for sid in deals_by_store}
+    flat = [{**d, "store_id": sid} for sid, ds in deals_by_store.items() for d in ds]
+    try:
+        assessed = await assess_deals(settings, flat)
+    except Exception as exc:  # noqa: BLE001 — scoring is an aid; the board must still render
+        assessed = {}
+        log.warning("Stock confidence unavailable", error=str(exc))
+    for sid, ds in deals_by_store.items():
+        kept: list[dict[str, Any]] = []
+        for d in ds:
+            extra = assessed.get((sid, d["item_id"]))
+            if extra:
+                d.update(extra)
+            conf = d.get("confidence")
+            low = bool(
+                settings.no_bs_mode
+                and conf is not None
+                and conf["score"] < settings.min_stock_confidence
+            )
+            (low_by_store[sid] if low else kept).append(d)
+        deals_by_store[sid] = kept
+    if include_low_confidence:
+        for sid, lows in low_by_store.items():
+            deals_by_store[sid].extend(lows)
+            low_by_store[sid] = []
 
     # Split out user-dismissed deals (they resurface if the deal deepens)
     dismissals = await get_dismissals(settings)
@@ -674,6 +712,7 @@ async def get_deal_board(settings: Settings) -> dict[str, Any]:
     return {
         "stores": deals_by_store,
         "hidden": hidden_by_store,
+        "low_confidence": low_by_store,
         "store_names": store_names,
     }
 

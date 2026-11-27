@@ -77,6 +77,47 @@ def request_allowance(settings: Settings) -> int:
     return min(len(ids), max(0, settings.watchlist_max_items)) * len(settings.store_list)
 
 
+async def lookup_item(
+    settings: Settings,
+    client: HDClient,
+    store_id: str,
+    item_id: str,
+    now: datetime,
+    summary: WatchlistSummary,
+) -> str:
+    """One authoritative lookup of one item at one store, recorded if returned.
+
+    Returns "ok", "failed" (no usable answer) or "not_returned" (a valid answer
+    that did not contain the item). Shared by the watchlist and the Stage-2
+    probe so both read an item the same way.
+    """
+    from hd.pipeline.discovery import _upsert_products
+    from hd.pipeline.snapshot import _insert_snapshots
+
+    raw = await search(
+        client,
+        keyword=item_id,
+        nav_param=None,
+        store_id=store_id,
+        start_index=0,
+        page_size=24,
+        storefilter="ALL",
+    )
+    if not is_valid_search_response(raw):
+        return "failed"
+    summary.lookups += 1
+
+    products = [p for p in parse_products(raw) if p.item_id == item_id]
+    snapshots = [s for s in parse_snapshots(raw, store_id) if s.item_id == item_id]
+    if not products or not snapshots:
+        # A valid answer without the item. Could be a wrong id, could be a
+        # degraded read — the digest reports it either way.
+        return "not_returned"
+    summary.products += await _upsert_products(settings, products)
+    summary.snapshots += await _insert_snapshots(settings, snapshots, store_id, now)
+    return "ok"
+
+
 async def run_watchlist(
     settings: Settings,
     client: HDClient,
@@ -84,10 +125,6 @@ async def run_watchlist(
     now: datetime | None = None,
 ) -> WatchlistSummary:
     """Price every watchlist item at every store and record what was seen."""
-    # Imported here to keep parity with daily_deals.py and avoid import cycles.
-    from hd.pipeline.discovery import _upsert_products
-    from hd.pipeline.snapshot import _insert_snapshots
-
     summary = WatchlistSummary()
     all_ids, summary.invalid_lines = read_watchlist(settings.watchlist_path)
     summary.listed = len(all_ids)
@@ -108,29 +145,11 @@ async def run_watchlist(
             summary.aborted = True
             summary.failed.extend(pairs[n:])
             break
-        raw = await search(
-            client,
-            keyword=item_id,
-            nav_param=None,
-            store_id=store_id,
-            start_index=0,
-            page_size=24,
-            storefilter="ALL",
-        )
-        if not is_valid_search_response(raw):
+        outcome = await lookup_item(settings, client, store_id, item_id, now, summary)
+        if outcome == "failed":
             summary.failed.append((store_id, item_id))
-            continue
-        summary.lookups += 1
-
-        products = [p for p in parse_products(raw) if p.item_id == item_id]
-        snapshots = [s for s in parse_snapshots(raw, store_id) if s.item_id == item_id]
-        if not products or not snapshots:
-            # A valid answer without the item. Could be a wrong id, could be a
-            # degraded read — the digest reports it either way.
+        elif outcome == "not_returned":
             summary.not_returned.append((store_id, item_id))
-            continue
-        summary.products += await _upsert_products(settings, products)
-        summary.snapshots += await _insert_snapshots(settings, snapshots, store_id, now)
 
     log.info(
         "Watchlist complete",
