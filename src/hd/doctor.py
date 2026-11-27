@@ -103,6 +103,34 @@ def check_scheduler(settings: Settings) -> Iterable[Check]:
         yield from _check_interpreter(data, path)
 
 
+_HD_SUBCOMMANDS = ("run-once", "notify", "prune")
+
+
+def _mentions_hd(command: str) -> bool:
+    return "hd" in command.replace("'", " ").replace('"', " ").split() or "hd " in command
+
+
+def _hd_invocations(command: str) -> list[str]:
+    """Every `hd` executable the command runs, quotes and spaces in paths respected.
+
+    The installer single-quotes the absolute path so a project folder with a
+    space in it (an external volume, say) still works. A regex over the raw
+    string misses `hd' run-once` and splits such a path at the space, so the
+    command is tokenised the way the shell will read it.
+    """
+    import shlex
+
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        words = command.split()
+    found: list[str] = []
+    for word, nxt in zip(words, words[1:], strict=False):
+        if nxt in _HD_SUBCOMMANDS and (word == "hd" or word.endswith("/hd")):
+            found.append(word)
+    return found
+
+
 def _check_interpreter(data: dict[str, Any], path: Path) -> Iterable[Check]:
     """The scheduled command must run this project's interpreter, not any `hd` on PATH.
 
@@ -111,13 +139,11 @@ def _check_interpreter(data: dict[str, Any], path: Path) -> Iterable[Check]:
     """
     args = data.get("ProgramArguments") or []
     command = args[-1] if args else ""
-    if "hd " not in command and not command.endswith("hd"):
+    tokens = _hd_invocations(command)
+    if not tokens and not _mentions_hd(command):
         yield Check("scheduler-command", WARN, "could not find an `hd` invocation")
         return
 
-    import re
-
-    tokens = re.findall(r"(\S*hd)\s+(?:run-once|notify|prune)", command)
     if not tokens:
         yield Check("scheduler-command", WARN, f"no recognised subcommand in {path.name}")
         return
