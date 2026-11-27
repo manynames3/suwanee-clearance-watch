@@ -415,3 +415,33 @@ def serve(
         f"[green]Starting dashboard at http://{settings.dashboard_host}:{settings.dashboard_port}[/green]"
     )
     run_dashboard(settings)  # Blocking — owns the event loop
+
+
+@app.command("notify-test")
+def notify_test() -> None:
+    """Send one test message through every configured push channel."""
+    setup_logging()
+    settings = Settings()
+
+    async def _test():
+        from hd.notifiers.base import Notification
+        from hd.notifiers.channels import ALL_NOTIFIERS
+
+        sample = Notification(
+            key="test", alert_type="TEST", store_id="0", store_name="",
+            item_id="0", title="Test notification from Clearance Watch",
+            deal_price=None, was_price=None, percent_off=None, confidence=None,
+            confidence_label="", qty=None, url=None,
+        )
+        active = [n for n in ALL_NOTIFIERS if n.enabled(settings)]
+        if not active:
+            console.print("[yellow]No push channel is configured. See .env.example.[/yellow]")
+            return 1
+        failed = 0
+        for n in active:
+            ok = await n.send(settings, [sample])
+            console.print(f"{'[green]ok[/green]' if ok else '[red]failed[/red]'}  {n.name}")
+            failed += 0 if ok else 1
+        return 1 if failed else 0
+
+    raise typer.Exit(_run(_test()))

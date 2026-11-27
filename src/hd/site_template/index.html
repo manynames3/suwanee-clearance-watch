@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#c2410c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Clearance">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" href="icon-192.png">
 <title>Clearance Watch</title>
 <style>
   :root {
@@ -72,6 +78,38 @@
   .filter { display: flex; align-items: center; gap: 8px; margin: 0 0 14px;
     font-size: 14px; color: var(--muted); }
   .empty { color: var(--muted); padding: 28px 0; text-align: center; }
+  .worth { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 14px; margin: 0 0 14px; }
+  .worth h2 { font-size: 13px; margin: 0 0 8px; text-transform: uppercase;
+    letter-spacing: 0.05em; color: var(--muted); }
+  .wrow { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+    padding: 6px 0; border-top: 1px solid var(--line); font-size: 14px; }
+  .wrow:first-of-type { border-top: 0; }
+  .verdict { font-weight: 700; font-size: 12px; padding: 2px 9px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+  .verdict.yes { color: var(--good); border-color: var(--good); }
+  .deal { flex-direction: column; }
+  .deal .row { display: flex; gap: 12px; text-decoration: none; color: inherit; }
+  .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .actions button, .actions a, .sheet button, .sheet a.btn {
+    font: inherit; font-size: 13px; padding: 7px 12px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink); text-decoration: none;
+  }
+  .actions button.primary, .sheet button.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .link { background: none; border: 0; color: var(--accent); font: inherit; font-size: 13px;
+    padding: 0; cursor: pointer; text-decoration: underline; }
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none;
+    align-items: flex-end; justify-content: center; z-index: 10; }
+  .overlay.open { display: flex; }
+  .sheet { background: var(--card); width: 100%; max-width: 520px; border-radius: 16px 16px 0 0;
+    padding: 18px 18px 26px; max-height: 92vh; overflow: auto; }
+  .sheet h3 { margin: 0 0 6px; font-size: 18px; }
+  .sheet .big { font-size: 34px; font-weight: 800; color: var(--accent); }
+  .sheet .barcode { background: #fff; border-radius: 8px; padding: 8px; margin: 12px 0; }
+  .sheet .barcode svg { width: 100%; height: auto; display: block; }
+  .sheet .kv { color: var(--muted); font-size: 14px; margin: 2px 0; }
+  .sheet .btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  .install { font-size: 13px; color: var(--muted); margin: 0 0 12px; }
   footer { color: var(--muted); font-size: 12px; margin-top: 28px; }
 </style>
 </head>
@@ -82,10 +120,19 @@
   <div id="banners"></div>
   <label class="filter" id="filter" hidden><input type="checkbox" id="nobs" checked>
     <span id="nobs-label">Hide low-confidence stock</span></label>
+  <p class="install" id="install" hidden>
+    <button class="link" id="install-btn">Install this on your phone</button> for a one-tap app that works offline.</p>
+  <div class="worth" id="worth" hidden></div>
   <div class="tabs" id="tabs" role="tablist"></div>
+  <p class="install" id="hidden-note" hidden>
+    <button class="link" id="hidden-toggle"></button></p>
   <div id="deals"></div>
   <footer id="foot"></footer>
 </main>
+<div class="overlay" id="hunter" role="dialog" aria-modal="true" aria-label="Deal card">
+  <div class="sheet" id="sheet"></div>
+</div>
+<script src="barcode.js"></script>
 <script>
 (function () {
   var $ = function (id) { return document.getElementById(id); };
@@ -107,7 +154,7 @@
     }) + " ET";
   };
   var ago = function (iso) {
-    var mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+    var mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
     if (mins < 60) return mins + " min ago";
     if (mins < 2880) return Math.round(mins / 60) + " h ago";
     return Math.round(mins / 1440) + " days ago";
@@ -127,11 +174,112 @@
   var hideLow = true;
   try { if (localStorage.getItem("hideLow") === "0") hideLow = false; } catch (e) {}
 
-  function visible(store) {
+  // ── 48 h "not on the shelf" memory. Per phone, per browser: there is no
+  // server to tell, so this never changes what the scanner or other devices see.
+  var GHOST_MS = 48 * 3600 * 1000;
+  var showHidden = false;
+  function ghostKey(store, d) { return store.id + ":" + d.item_id; }
+  function readGhosts() {
+    var raw = {};
+    try { raw = JSON.parse(localStorage.getItem("ghosts") || "{}"); } catch (e) {}
+    var now = Date.now(), live = {};
+    Object.keys(raw).forEach(function (k) { if (raw[k] > now) live[k] = raw[k]; });
+    return live;
+  }
+  function writeGhosts(g) { try { localStorage.setItem("ghosts", JSON.stringify(g)); } catch (e) {} }
+  function setGhost(store, d, on) {
+    var g = readGhosts();
+    if (on) g[ghostKey(store, d)] = Date.now() + GHOST_MS; else delete g[ghostKey(store, d)];
+    writeGhosts(g);
+  }
+  function isGhost(store, d) { return !!readGhosts()[ghostKey(store, d)]; }
+
+  function confident(store) {
     if (!hideLow || !data.no_bs || !data.no_bs.enabled) return store.deals;
     return store.deals.filter(function (d) {
       return !d.confidence || d.confidence.score >= data.no_bs.minimum;
     });
+  }
+  function visible(store) {
+    return confident(store).filter(function (d) { return showHidden || !isGhost(store, d); });
+  }
+  function hiddenCount(store) {
+    return confident(store).filter(function (d) { return isGhost(store, d); }).length;
+  }
+
+  function safeLink(a, url, pattern) {
+    if (pattern.test(url || "")) { a.href = url; a.target = "_blank"; a.rel = "noopener"; return true; }
+    return false;
+  }
+
+  function openHunter(store, d) {
+    var sheet = $("sheet");
+    sheet.textContent = "";
+    sheet.appendChild(el("h3", null, d.title || "Item " + d.item_id));
+    sheet.appendChild(el("div", "big", money(d.price) || "Price unknown"));
+    if (d.was != null && d.pct_off != null) {
+      sheet.appendChild(el("div", "kv", "was " + money(d.was) + " · " + d.pct_off + "% off · saves " + money(d.saves)));
+    }
+    sheet.appendChild(el("div", "kv", (d.qty != null ? d.qty + " reported in stock" : "Quantity not reported") +
+      " · item " + d.item_id));
+    sheet.appendChild(el("div", "kv", (store.name || "Store") + " #" + store.id));
+    if (d.confidence) {
+      sheet.appendChild(el("div", "kv", "Stock confidence: " + d.confidence.label + " " + d.confidence.score +
+        ((d.confidence.tags || []).length ? " (" + d.confidence.tags.join(", ") + ")" : "")));
+    }
+    var upc = window.HDBarcode ? HDBarcode.normalize(d.upc) : null;
+    if (upc) {
+      var box = el("div", "barcode");
+      box.appendChild(HDBarcode.svg(upc));
+      sheet.appendChild(box);
+      sheet.appendChild(el("div", "kv", "Scan this at a price checker or the Home Depot app to see the live shelf price."));
+    } else {
+      sheet.appendChild(el("div", "kv", "No valid barcode on record for this item."));
+    }
+    sheet.appendChild(el("div", "kv", "Estimate only: confirm the price and stock in store."));
+    var btns = el("div", "btns");
+    var ghost = isGhost(store, d);
+    var gb = el("button", null, ghost ? "Show this again" : "Not on the shelf (hide 48 h)");
+    gb.onclick = function () { setGhost(store, d, !ghost); closeHunter(); renderTabs(); renderDeals(); };
+    btns.appendChild(gb);
+    var item = el("a", "btn", "Item page");
+    if (safeLink(item, d.url, /^https:\/\/www\.homedepot\.com\//)) btns.appendChild(item);
+    var where = el("a", "btn", "Directions");
+    var place = store.place || {};
+    if (safeLink(where, place.maps_url, /^https:\/\/www\.google\.com\/maps\//)) btns.appendChild(where);
+    var close = el("button", "primary", "Close");
+    close.onclick = closeHunter;
+    btns.appendChild(close);
+    sheet.appendChild(btns);
+    $("hunter").classList.add("open");
+    try { if (navigator.wakeLock) navigator.wakeLock.request("screen").catch(function () {}); } catch (e) {}
+  }
+  function closeHunter() { $("hunter").classList.remove("open"); }
+  $("hunter").addEventListener("click", function (e) { if (e.target === this) closeHunter(); });
+
+  function renderWorth() {
+    var box = $("worth");
+    box.textContent = "";
+    if (data.stores.length < 2) { box.hidden = true; return; }
+    box.hidden = false;
+    box.appendChild(el("h2", null, "Worth the drive?"));
+    var ranked = data.stores.slice().sort(function (x, y) { return y.worth.savings - x.worth.savings; });
+    ranked.forEach(function (s) {
+      var row = el("div", "wrow");
+      var left = el("div");
+      left.appendChild(el("div", null, (s.name || "Store") + " #" + s.id));
+      var w = s.worth;
+      left.appendChild(el("div", "meta", w.deals
+        ? w.deals + " confident deal" + (w.deals === 1 ? "" : "s") + " · " + money(w.savings) + " off" +
+          (w.best ? " · best: " + money(w.best.saves) + " off" : "")
+        : "No confident deals right now"));
+      row.appendChild(left);
+      var v = el("span", "verdict" + (w.worth ? " yes" : ""), w.worth ? "Worth a trip" : "Not yet");
+      v.title = "Needs " + w.min_deals + "+ confident deals worth " + money(w.min_savings) + "+ combined";
+      row.appendChild(v);
+      box.appendChild(row);
+    });
+    box.appendChild(el("div", "meta", "A rule of thumb from stock-confident deals only. It does not know your drive time."));
   }
 
   function renderDeals() {
@@ -139,6 +287,11 @@
     box.textContent = "";
     var store = data.stores.filter(function (s) { return s.id === current; })[0];
     if (!store) return;
+    var hid = hiddenCount(store);
+    $("hidden-note").hidden = hid === 0;
+    $("hidden-toggle").textContent = showHidden
+      ? "Hide the " + hid + " you marked not on the shelf"
+      : hid + " hidden as not on the shelf. Show";
     var deals = visible(store);
     if (!deals.length) {
       box.appendChild(el("p", "empty", data.run.degraded.length
@@ -147,17 +300,17 @@
       return;
     }
     deals.forEach(function (d) {
-      var a = el("a", "deal");
+      var card = el("div", "deal");
+      var row = el("a", "row");
       // Only ever link to Home Depot.
-      if (/^https:\/\/www\.homedepot\.com\//.test(d.url || "")) {
-        a.href = d.url; a.target = "_blank"; a.rel = "noopener";
-      }
+      safeLink(row, d.url, /^https:\/\/www\.homedepot\.com\//);
       if (/^https:\/\//.test(d.image_url || "")) {
         var img = el("img"); img.src = d.image_url; img.alt = ""; img.loading = "lazy";
-        a.appendChild(img);
+        row.appendChild(img);
       }
       var body = el("div", "body");
       var title = el("p", "title", d.title);
+      if (isGhost(store, d)) title.appendChild(el("span", "badge low", "hidden"));
       if (d.is_new) title.appendChild(el("span", "tag", "New"));
       if (d.confidence) {
         var c = d.confidence;
@@ -193,8 +346,18 @@
           "% off the listed price, but only " + d.context.true_pct + "% off its usual " +
           money(d.context.typical_price)));
       }
-      a.appendChild(body);
-      box.appendChild(a);
+      row.appendChild(body);
+      card.appendChild(row);
+      var actions = el("div", "actions");
+      var hunt = el("button", "primary", "Hunter card");
+      hunt.onclick = function () { openHunter(store, d); };
+      actions.appendChild(hunt);
+      var ghosted = isGhost(store, d);
+      var fb = el("button", null, ghosted ? "Show again" : "Not on the shelf");
+      fb.onclick = function () { setGhost(store, d, !ghosted); renderTabs(); renderDeals(); };
+      actions.appendChild(fb);
+      card.appendChild(actions);
+      box.appendChild(card);
     });
   }
 
@@ -208,6 +371,22 @@
       b.setAttribute("aria-selected", String(s.id === current));
       b.onclick = function () { current = s.id; renderTabs(); renderDeals(); };
       tabs.appendChild(b);
+    });
+  }
+
+  $("hidden-toggle").onclick = function () { showHidden = !showHidden; renderTabs(); renderDeals(); };
+
+  // ── Install + offline
+  var installEvent = null;
+  window.addEventListener("beforeinstallprompt", function (e) {
+    e.preventDefault(); installEvent = e; $("install").hidden = false;
+  });
+  $("install-btn").onclick = function () {
+    if (installEvent) { installEvent.prompt(); installEvent = null; $("install").hidden = true; }
+  };
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", function () {
+      navigator.serviceWorker.register("sw.js").catch(function () {});
     });
   }
 
@@ -245,11 +424,12 @@
           renderTabs(); renderDeals();
         };
       }
+      renderWorth();
       renderTabs();
       renderDeals();
       var foot = d.run.snapshots + " price readings · " + d.run.requests + " requests";
       if (d.min_dollar_off > 0) foot += " · hiding savings under " + money(d.min_dollar_off);
-      $("foot").textContent = foot + ". Prices are what the scanner recorded; confirm in store.";
+      $("foot").textContent = foot + ". " + (d.disclaimer || "Prices are what the scanner recorded; confirm in store.");
     })
     .catch(function (e) {
       $("sub").textContent = "Could not load the latest scan.";

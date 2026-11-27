@@ -405,7 +405,11 @@ class TestDealsPage:
             "site_out_dir": str(tmp_path / "out"), "slack_bot_token": "xoxb-secret",
         })
         out = write_site(s, await build_site_data(s, report))
-        assert {p.name for p in out.iterdir()} == {"index.html", "deals.json", "_headers"}
+        # The page is an installable PWA, so the folder carries its shell too.
+        assert {p.name for p in out.iterdir()} == {
+            "index.html", "deals.json", "_headers", "barcode.js", "sw.js",
+            "manifest.webmanifest", "icon-192.png", "icon-512.png",
+        }
         blob = (out / "deals.json").read_text()
         assert _json.loads(blob)["stores"][0]["deals"]
         assert "xoxb-secret" not in blob

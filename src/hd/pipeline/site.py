@@ -32,7 +32,19 @@ _HEADERS = """/*
   X-Robots-Tag: noindex, nofollow
 /deals.json
   Cache-Control: no-store
+/sw.js
+  Cache-Control: no-cache
 """
+
+# Static assets copied beside deals.json. The page is an installable PWA.
+ASSETS = (
+    "index.html",
+    "barcode.js",
+    "sw.js",
+    "manifest.webmanifest",
+    "icon-192.png",
+    "icon-512.png",
+)
 
 
 def _iso(ts: datetime | None) -> str | None:
@@ -67,14 +79,47 @@ def _deal_row(deal: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+DISCLAIMER = (
+    "Inventory counts and prices are estimates from public store data, not a guarantee. "
+    "Verify in store before you drive or buy."
+)
+
+
+def worth_the_drive(rows: list[dict[str, Any]], settings: Settings) -> dict[str, Any]:
+    """Summarise one store's confident deals into a drive-or-skip signal.
+
+    Only deals whose stock confidence meets the No-BS minimum count, and only
+    those with a known saving; an unscored or unknown-price deal is not
+    evidence of a trip worth making. The thresholds are settings because
+    "worth it" depends on how far you live.
+    """
+    minimum = settings.min_stock_confidence
+    solid = [
+        r for r in rows
+        if r.get("saves") and (r.get("confidence") or {}).get("score", -1) >= minimum
+    ]
+    total = round(sum(r["saves"] for r in solid), 2)
+    best = max(solid, key=lambda r: r["saves"], default=None)
+    worth = len(solid) >= settings.worth_drive_min_deals and total >= settings.worth_drive_min_savings
+    return {
+        "worth": worth,
+        "deals": len(solid),
+        "savings": total,
+        "best": {"title": best["title"], "saves": best["saves"], "item_id": best["item_id"]} if best else None,
+        "min_deals": settings.worth_drive_min_deals,
+        "min_savings": settings.worth_drive_min_savings,
+    }
+
+
 async def build_site_data(settings: Settings, report: RunReport | None) -> dict[str, Any]:
     """Everything the page shows: the run's health and each store's deals."""
-    from hd.db.repository import get_deal_board
+    from hd.db.repository import get_deal_board, get_store_directory
 
     # Every deal goes to the page, scored. Hiding low-confidence ones is the
     # reader's default-on toggle, so the evidence stays inspectable.
     board = await get_deal_board(settings, include_low_confidence=True)
     floor = settings.min_dollar_off
+    directory = await get_store_directory(settings)
     stores = []
     for store_id in settings.store_list:
         rows = [_deal_row(d) for d in board["stores"].get(store_id, [])]
@@ -84,6 +129,8 @@ async def build_site_data(settings: Settings, report: RunReport | None) -> dict[
         stores.append({
             "id": store_id,
             "name": board["store_names"].get(store_id),
+            "place": directory.get(store_id) or {},
+            "worth": worth_the_drive(rows, settings),
             "deals": rows,
         })
     run: dict[str, Any] = {"started": None, "degraded": [], "notes": [],
@@ -101,6 +148,7 @@ async def build_site_data(settings: Settings, report: RunReport | None) -> dict[
         "run": run,
         "min_dollar_off": floor,
         "no_bs": {"enabled": settings.no_bs_mode, "minimum": settings.min_stock_confidence},
+        "disclaimer": DISCLAIMER,
         "stores": stores,
     }
 
@@ -132,7 +180,14 @@ def write_site(settings: Settings, data: dict[str, Any]) -> Path:
     """Write index.html, deals.json and _headers into the output folder."""
     out = Path(settings.site_out_dir).expanduser()
     out.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(TEMPLATE_DIR / "index.html", out / "index.html")
+    for name in ASSETS:
+        if name == "sw.js":
+            # Stamp the cache name so each publish replaces the previous shell.
+            build = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+            text = (TEMPLATE_DIR / name).read_text().replace("__BUILD__", build)
+            (out / name).write_text(text)
+        else:
+            shutil.copyfile(TEMPLATE_DIR / name, out / name)
     (out / "_headers").write_text(_HEADERS)
     (out / "deals.json").write_text(json.dumps(data, indent=1))
     return out

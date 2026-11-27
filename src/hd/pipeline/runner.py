@@ -71,6 +71,15 @@ async def _report_scan_health(settings: Settings, *, ok: bool) -> str | None:
     return transition
 
 
+async def _store_rows(settings: Settings) -> list[dict]:
+    from hd.db.repository import get_store_summary
+
+    try:
+        return await get_store_summary(settings)
+    except Exception:
+        return []
+
+
 async def run_pipeline(
     settings: Settings,
     mode: str,
@@ -450,6 +459,22 @@ async def run_pipeline(
                 log.info("Slack notification sent", groups=sent_count)
             else:
                 log.warning("Slack notification failed")
+
+    # Other push channels (ntfy, Pushover, Discord, Telegram, email). Independent
+    # of Slack: each is off unless its credentials are set, and a failure here
+    # is logged but never touches the scan result.
+    if alert_count > 0:
+        try:
+            from hd.db.repository import get_alerts as _get_alerts
+            from hd.notifiers.dispatch import dispatch_alerts
+
+            fresh = await _get_alerts(settings, since_hours=4, limit=500)
+            names = {str(s.get("store_id")): s.get("name") or "" for s in await _store_rows(settings)}
+            pushed = await dispatch_alerts(settings, fresh, store_names=names)
+            if pushed.delivered:
+                log.info("Push notifications", selected=pushed.selected, delivered=pushed.delivered)
+        except Exception as exc:
+            log.warning("Push notification step failed", error=str(exc))
 
     # Update Slack canvas with current deal rundown
     canvas_deals = 0

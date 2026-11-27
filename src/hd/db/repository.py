@@ -892,6 +892,35 @@ def store_page_url(store: Store) -> str | None:
     )
 
 
+def store_maps_url(store: Store) -> str | None:
+    """A Maps search for the store. Built from the name, state and ZIP we hold.
+
+    No coordinates are stored, so this is a text search rather than a pin; it
+    resolves a named Home Depot in a ZIP unambiguously in practice.
+    """
+    if not (store.name and store.zip):
+        return None
+    query = f"The Home Depot {store.name} {store.state or ''} {store.zip}".replace("  ", " ").strip()
+    return "https://www.google.com/maps/search/?api=1&query=" + quote(query, safe="")
+
+
+async def get_store_directory(settings: Settings) -> dict[str, dict[str, Any]]:
+    """Per-store details the phone page needs: place, store page and Maps link."""
+    async with get_session(settings) as session:
+        rows = (await session.execute(select(Store))).scalars().all()
+    return {
+        st.store_id: {
+            "name": st.name,
+            "city": st.city,
+            "state": st.state,
+            "zip": st.zip,
+            "page_url": store_page_url(st),
+            "maps_url": store_maps_url(st),
+        }
+        for st in rows
+    }
+
+
 def _is_older_day(low_ts, snapshot_ts) -> bool:
     """Was the low set on an earlier day than the reading we are showing?
 

@@ -483,9 +483,25 @@ class Settings(BaseSettings):
     dashboard_refresh_seconds: int = 300
     dashboard_dark_mode: bool = True
 
-    # Optional notifiers (v1: unused)
+    # Push notifiers. A channel with no credentials is off. All are optional
+    # and independent of Slack.
+    ntfy_url: str = "https://ntfy.sh"
+    ntfy_topic: str = ""
+    pushover_token: str = ""
+    pushover_user: str = ""
     discord_webhook_url: str = ""
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
     email_smtp_host: str = ""
+    email_smtp_port: int = 587
+    email_user: str = ""
+    email_password: str = ""
+    email_from: str = ""
+    email_to: str = ""
+    # JSON list of subscription rules; empty means "everything that passed No-BS".
+    notify_rules: str = ""
+    notify_dedupe_path: str = ".hd_notify_sent.json"
+    notify_dedupe_hours: float = 24.0
 
     # Slack notifications
     slack_bot_token: str = ""
@@ -536,6 +552,10 @@ class Settings(BaseSettings):
     # Cloudflare, so it carries deals only — never configuration or secrets.
     site_worker: str = ""
     site_out_dir: str = ".site_out"
+    # "Worth the Drive": a store earns the label when its confident deals add up.
+    # A tunable heuristic, not a measurement; drive time is not known to the app.
+    worth_drive_min_savings: float = 100.0
+    worth_drive_min_deals: int = 3
     site_deploy_timeout: float = 180.0
 
     @property
