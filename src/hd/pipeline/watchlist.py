@@ -17,10 +17,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from hd.config import Settings
-from hd.hd_api.graphql import is_valid_search_response, search
-from hd.hd_api.parsers import parse_products, parse_snapshots
+from hd.hd_api.graphql import is_valid_search_response
 from hd.http.client import HDClient
 from hd.logging import get_logger
+from hd.retailers import get_adapter
 
 log = get_logger("pipeline.watchlist")
 
@@ -94,21 +94,14 @@ async def lookup_item(
     from hd.pipeline.discovery import _upsert_products
     from hd.pipeline.snapshot import _insert_snapshots
 
-    raw = await search(
-        client,
-        keyword=item_id,
-        nav_param=None,
-        store_id=store_id,
-        start_index=0,
-        page_size=24,
-        storefilter="ALL",
-    )
+    adapter = get_adapter()
+    raw = await adapter.fetch_item_detail(client, store_id=store_id, item_id=item_id)
     if not is_valid_search_response(raw):
         return "failed"
     summary.lookups += 1
 
-    products = [p for p in parse_products(raw) if p.item_id == item_id]
-    snapshots = [s for s in parse_snapshots(raw, store_id) if s.item_id == item_id]
+    products = [p for p in adapter.parse_products(raw) if p.item_id == item_id]
+    snapshots = [s for s in adapter.parse_snapshots(raw, store_id) if s.item_id == item_id]
     if not products or not snapshots:
         # A valid answer without the item. Could be a wrong id, could be a
         # degraded read — the digest reports it either way.

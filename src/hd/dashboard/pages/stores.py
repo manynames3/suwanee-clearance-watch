@@ -8,7 +8,7 @@ from hd.dashboard import _state
 from hd.dashboard.components.charts import store_comparison_options
 from hd.dashboard.components.header import render_header
 from hd.dashboard.components.health import render_health_banner
-from hd.dashboard.queries import get_store_summary
+from hd.db.repository import get_store_summary
 
 
 @ui.page("/stores")

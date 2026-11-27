@@ -414,7 +414,7 @@ async def run_pipeline(
     # Auto-notify Slack when new alerts are found
     sent_count = 0
     if alert_count > 0 and settings.slack_bot_token:
-        from hd.dashboard.queries import get_alerts
+        from hd.db.repository import get_alerts
         from hd.grouping import group_alerts, parse_ts
         from hd.notifiers.formatter import format_slack_blocks
         from hd.notifiers.webhook import post_to_slack

@@ -55,7 +55,7 @@ async def run_probe(
     client: HDClient,
     now: datetime | None = None,
 ) -> ProbeSummary:
-    from hd.dashboard.queries import get_deal_board
+    from hd.db.repository import get_deal_board
 
     summary = ProbeSummary()
     if settings.probe_max_per_run <= 0 or client.is_throttled:

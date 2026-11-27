@@ -34,7 +34,7 @@ from hd.dashboard.components.formatters import (
 )
 from hd.dashboard.components.header import render_header
 from hd.dashboard.components.health import render_health_banner
-from hd.dashboard.queries import get_product_detail, get_products_with_latest
+from hd.db.repository import get_product_detail, get_products_with_latest
 
 
 @ui.page("/products")

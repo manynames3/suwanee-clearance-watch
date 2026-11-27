@@ -264,7 +264,7 @@ def notify(
         from datetime import datetime, timedelta, timezone
 
         from hd.db.base import init_db as _init_tables, close_db
-        from hd.dashboard.queries import get_alerts
+        from hd.db.repository import get_alerts
         from hd.grouping import group_alerts
         from hd.notifiers.formatter import format_slack_message, format_slack_blocks
         from hd.notifiers.webhook import post_to_slack

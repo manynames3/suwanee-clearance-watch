@@ -69,7 +69,7 @@ def _deal_row(deal: dict[str, Any]) -> dict[str, Any]:
 
 async def build_site_data(settings: Settings, report: RunReport | None) -> dict[str, Any]:
     """Everything the page shows: the run's health and each store's deals."""
-    from hd.dashboard.queries import get_deal_board
+    from hd.db.repository import get_deal_board
 
     # Every deal goes to the page, scored. Hiding low-confidence ones is the
     # reader's default-on toggle, so the evidence stays inspectable.
