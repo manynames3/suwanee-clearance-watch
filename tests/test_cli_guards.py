@@ -160,7 +160,7 @@ class TestRunOnceReadsOneClock:
         monkeypatch.setattr("hd.pipeline.browse.current_et_hour", spy_hour)
         monkeypatch.setattr("hd.pipeline.browse.run_browse", fake_browse)
         monkeypatch.setattr("hd.pipeline.diff.run_diff", nothing)
-        monkeypatch.setattr("hd.cli._plugins", lambda: None)
+        monkeypatch.setattr("hd.cli._common._plugins", lambda: None)
 
         result = runner.invoke(app, ["run-once"])
         assert result.exit_code == 0, result.output

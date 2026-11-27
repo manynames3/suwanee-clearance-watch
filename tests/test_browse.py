@@ -2521,7 +2521,7 @@ class TestTheRefactorDidNotDoubleTheWork:
     def test_price_partition_runs_at_most_once_per_plan(
         self, browse_settings, monkeypatch, recorded
     ):
-        from hd.pipeline import browse as mod
+        from hd.pipeline import nav_planner as mod  # plan_walks and price_partition moved here
         calls = []
         real = mod.price_partition
 
@@ -2782,7 +2782,7 @@ class TestRecordedSplitStandsInForMissingFacets:
     def test_price_partition_is_still_evaluated_at_most_once(
         self, browse_settings, monkeypatch, recorded
     ):
-        from hd.pipeline import browse as mod
+        from hd.pipeline import nav_planner as mod  # plan_walks and price_partition moved here
         calls = []
         real = mod.price_partition
 
